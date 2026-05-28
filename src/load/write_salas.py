@@ -9,6 +9,7 @@ from src.load.prepare_sql_rows import (
     prepare_notificacion_rows,
     prepare_regla_rows,
 )
+from src.load.timing import timed_step
 
 
 def _fetch_case_id_map(id_archivo: int) -> dict[str, int]:
@@ -38,63 +39,129 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         "notificaciones_insertadas": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
+        "timings": {},
         "mensaje": "Resultado de salas escrito en Azure SQL",
     }
 
     def transaction():
-        db.execute_update(
-            "jnc.etl_archivo_cargado",
-            "id_archivo",
-            id_archivo,
-            {"estado_proceso": "EN_PROCESO"},
+        timings = summary["timings"]
+
+        timed_step(
+            timings,
+            "update_archivo_en_proceso",
+            lambda: db.execute_update(
+                "jnc.etl_archivo_cargado",
+                "id_archivo",
+                id_archivo,
+                {"estado_proceso": "EN_PROCESO"},
+            ),
         )
 
-        db.delete_by_archivo("jnc.notificacion_esperada", id_archivo)
-        db.delete_by_archivo("jnc.caso_calificado", id_archivo)
-        db.delete_by_archivo("jnc.etl_estructura_hoja", id_archivo)
-        db.delete_by_archivo("jnc.etl_error_procesamiento", id_archivo)
-        db.delete_by_archivo("jnc.etl_ejecucion_regla", id_archivo)
+        timed_step(
+            timings,
+            "delete_notificacion_esperada",
+            lambda: db.delete_by_archivo("jnc.notificacion_esperada", id_archivo),
+        )
+        timed_step(
+            timings,
+            "delete_caso_calificado",
+            lambda: db.delete_by_archivo("jnc.caso_calificado", id_archivo),
+        )
+        timed_step(
+            timings,
+            "delete_etl_estructura_hoja",
+            lambda: db.delete_by_archivo("jnc.etl_estructura_hoja", id_archivo),
+        )
+        timed_step(
+            timings,
+            "delete_etl_error_procesamiento",
+            lambda: db.delete_by_archivo("jnc.etl_error_procesamiento", id_archivo),
+        )
+        timed_step(
+            timings,
+            "delete_etl_ejecucion_regla",
+            lambda: db.delete_by_archivo("jnc.etl_ejecucion_regla", id_archivo),
+        )
 
-        estructura_rows = prepare_estructura_hoja_rows(id_archivo, result)
-        error_rows = prepare_error_rows(id_archivo, result)
-        regla_rows = prepare_regla_rows(id_archivo, result, "SALAS")
+        estructura_rows = timed_step(
+            timings,
+            "prepare_estructura_hoja",
+            lambda: prepare_estructura_hoja_rows(id_archivo, result),
+        )
+        error_rows = timed_step(
+            timings,
+            "prepare_error_rows",
+            lambda: prepare_error_rows(id_archivo, result),
+        )
+        regla_rows = timed_step(
+            timings,
+            "prepare_regla_rows",
+            lambda: prepare_regla_rows(id_archivo, result, "SALAS"),
+        )
 
-        summary["estructura_hoja_insertadas"] = db.insert_many(
-            "jnc.etl_estructura_hoja",
-            estructura_rows,
+        summary["estructura_hoja_insertadas"] = timed_step(
+            timings,
+            "insert_etl_estructura_hoja",
+            lambda: db.insert_many("jnc.etl_estructura_hoja", estructura_rows),
         )
 
         if result.get("status") == "OK":
-            caso_rows = prepare_caso_rows(id_archivo, result)
-            summary["casos_insertados"] = db.insert_many("jnc.caso_calificado", caso_rows)
+            caso_rows = timed_step(
+                timings,
+                "prepare_caso_calificado",
+                lambda: prepare_caso_rows(id_archivo, result),
+            )
+            summary["casos_insertados"] = timed_step(
+                timings,
+                "insert_caso_calificado",
+                lambda: db.insert_many("jnc.caso_calificado", caso_rows),
+            )
 
-            caso_id_by_radicado = _fetch_case_id_map(id_archivo)
-            notificacion_rows = prepare_notificacion_rows(
-                id_archivo,
-                result,
-                caso_id_by_radicado,
+            caso_id_by_radicado = timed_step(
+                timings,
+                "fetch_caso_id_map",
+                lambda: _fetch_case_id_map(id_archivo),
+            )
+            notificacion_rows = timed_step(
+                timings,
+                "prepare_notificacion_esperada",
+                lambda: prepare_notificacion_rows(id_archivo, result, caso_id_by_radicado),
             )
             notificacion_rows = [
                 row for row in notificacion_rows if row.get("id_caso") is not None
             ]
-            summary["notificaciones_insertadas"] = db.insert_many(
-                "jnc.notificacion_esperada",
-                notificacion_rows,
+            summary["notificaciones_insertadas"] = timed_step(
+                timings,
+                "insert_notificacion_esperada",
+                lambda: db.insert_many("jnc.notificacion_esperada", notificacion_rows),
             )
 
-        summary["errores_insertados"] = db.insert_many(
-            "jnc.etl_error_procesamiento",
-            error_rows,
+        summary["errores_insertados"] = timed_step(
+            timings,
+            "insert_etl_error_procesamiento",
+            lambda: db.insert_many("jnc.etl_error_procesamiento", error_rows),
         )
-        summary["reglas_insertadas"] = db.insert_many("jnc.etl_ejecucion_regla", regla_rows)
+        summary["reglas_insertadas"] = timed_step(
+            timings,
+            "insert_etl_ejecucion_regla",
+            lambda: db.insert_many("jnc.etl_ejecucion_regla", regla_rows),
+        )
 
-        archivo_update = prepare_archivo_update_from_salas_result(id_archivo, result)
+        archivo_update = timed_step(
+            timings,
+            "prepare_archivo_update",
+            lambda: prepare_archivo_update_from_salas_result(id_archivo, result),
+        )
         archivo_update.pop("id_archivo", None)
-        db.execute_update(
-            "jnc.etl_archivo_cargado",
-            "id_archivo",
-            id_archivo,
-            archivo_update,
+        timed_step(
+            timings,
+            "update_archivo_final",
+            lambda: db.execute_update(
+                "jnc.etl_archivo_cargado",
+                "id_archivo",
+                id_archivo,
+                archivo_update,
+            ),
         )
 
         if result.get("status") != "OK":
