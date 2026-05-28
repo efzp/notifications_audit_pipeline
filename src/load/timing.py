@@ -13,8 +13,14 @@ def timed_step(
 ) -> T:
     start = perf_counter()
     try:
-        return callback()
-    finally:
+        result = callback()
+    except Exception:
         elapsed = round(perf_counter() - start, 4)
         timings[step_name] = elapsed
-        logging.info("%s completado en %.4f segundos", step_name, elapsed)
+        logging.exception("%s fallo en %.4f segundos", step_name, elapsed)
+        raise
+
+    elapsed = round(perf_counter() - start, 4)
+    timings[step_name] = elapsed
+    logging.info("%s completado en %.4f segundos", step_name, elapsed)
+    return result
