@@ -112,7 +112,28 @@ NOTIFICATION_ENTITIES = [
     "arl",
     "aseguradoras",
 ]
-EXCLUDED_NOTIFICATION_EMAIL_VALUES = {"remitente", "particular"}
+EXCLUDED_NOTIFICATION_EMAIL_VALUES = {
+    "remitente",
+    "particular",
+    "n_a",
+    "na",
+    "no_aplica",
+    "no_informa",
+    "no_informan",
+    "no_informado",
+    "no_reporta",
+    "no_reportan",
+    "sin_correo",
+    "sin_email",
+}
+EXCLUDED_NOTIFICATION_EMAIL_PHRASES = {
+    "no_aplica",
+    "no_informa",
+    "no_informan",
+    "no_reporta",
+    "sin_correo",
+    "sin_email",
+}
 
 ROW_METADATA_FIELDS = {
     "pestana_nombre": "pestana_nombre",
@@ -677,7 +698,21 @@ def should_skip_notification_email(value: object) -> bool:
     if value is None:
         return False
 
-    return normalize_db_string(str(value)) in EXCLUDED_NOTIFICATION_EMAIL_VALUES
+    raw_value = str(value).strip()
+    if not raw_value:
+        return True
+
+    normalized_value = normalize_db_string(raw_value)
+    if normalized_value in EXCLUDED_NOTIFICATION_EMAIL_VALUES:
+        return True
+
+    if any(phrase in normalized_value for phrase in EXCLUDED_NOTIFICATION_EMAIL_PHRASES):
+        return True
+
+    if "@" not in raw_value and re.fullmatch(r"[\d\s.,/\-]+", raw_value):
+        return True
+
+    return False
 
 
 def split_notification_emails(value: object) -> list[object]:

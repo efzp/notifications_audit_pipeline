@@ -25,6 +25,7 @@ ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
 
 PLAZO_DIAS_CALENDARIO = 2
 FUZZY_THRESHOLD = 0.82
+EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
 
 def utc_now_iso() -> str:
@@ -276,6 +277,31 @@ def _correo_email(row: dict[str, Any]) -> str | None:
     )
 
 
+def _extract_expected_emails(row: dict[str, Any]) -> list[str]:
+    raw_values = [
+        row.get("correo_o_guia_reportado"),
+        row.get("correo_normalizado"),
+    ]
+    emails: list[str] = []
+    seen = set()
+
+    for raw_value in raw_values:
+        if raw_value is None:
+            continue
+
+        matches = EMAIL_PATTERN.findall(str(raw_value))
+        if not matches and "@" in str(raw_value):
+            matches = [str(raw_value)]
+
+        for match in matches:
+            normalized = normalize_email(match)
+            if normalized and normalized not in seen:
+                emails.append(normalized)
+                seen.add(normalized)
+
+    return emails
+
+
 def _score_candidate(
     expected_row: dict[str, Any],
     correo_row: dict[str, Any],
@@ -283,9 +309,7 @@ def _score_candidate(
     expected_document = normalize_document(
         expected_row.get("cedula_normalizada") or expected_row.get("cedula")
     )
-    expected_email = normalize_email(
-        expected_row.get("correo_normalizado") or expected_row.get("correo_o_guia_reportado")
-    )
+    expected_emails = _extract_expected_emails(expected_row)
     correo_email = _correo_email(correo_row)
     correo_date = _correo_date(correo_row)
     audience_date = expected_row.get("hoja_trabajo_fecha_audiencia")
@@ -297,7 +321,7 @@ def _score_candidate(
     )
     asunto_ok, asunto_score, asunto_topic = _validate_asunto(correo_row.get("asunto"))
     evento_ok, evento_score, evento_type = _validate_evento(correo_row.get("estado_correo"))
-    correo_ok = bool(expected_email and correo_email and expected_email == correo_email)
+    correo_ok = bool(correo_email and correo_email in expected_emails)
     days_after_audience = _days_between(audience_date, correo_date)
     plazo_ok = (
         days_after_audience is not None
@@ -321,7 +345,8 @@ def _score_candidate(
         "fuente_documento_match": document_source,
         "asunto_tipo_match": asunto_topic,
         "evento_tipo_match": evento_type,
-        "correo_esperado": expected_email,
+        "correos_esperados": expected_emails,
+        "correo_esperado": correo_email if correo_ok else (expected_emails[0] if expected_emails else None),
         "correo_certificado": correo_email,
         "fecha_audiencia": normalize_date(audience_date),
         "fecha_envio_certificado": normalize_date(correo_date),
@@ -429,6 +454,7 @@ def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | 
         "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
         "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
         "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
+        "correos_esperados": candidate.get("correos_esperados") if candidate else [],
         "correo_esperado": candidate.get("correo_esperado") if candidate else None,
         "correo_certificado": candidate.get("correo_certificado") if candidate else None,
         "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
@@ -465,12 +491,18 @@ def recalcular_cruce_notificaciones(
     correo_index = _build_correo_index(correo_rows)
 
     updates = []
+    radicado_statuses: dict[str, list[str]] = {}
     summary = {
         "notificaciones_evaluadas": len(expected_rows),
         "notificaciones_actualizadas": 0,
         "cumplen": 0,
         "pendientes": 0,
         "sin_correo_certificado": 0,
+        "porcentaje_notificaciones_validadas": 0.0,
+        "radicados_evaluados": 0,
+        "radicados_validados": 0,
+        "radicados_pendientes": 0,
+        "porcentaje_radicados_validados": 0.0,
     }
 
     for expected_row in expected_rows:
@@ -478,12 +510,42 @@ def recalcular_cruce_notificaciones(
         update_row = _build_update_row(expected_row, candidate, has_document_candidates)
         updates.append(update_row)
 
-        if update_row["estado_revision_notificacion"] == ESTADO_CUMPLE:
+        status = update_row["estado_revision_notificacion"]
+        radicado = (
+            expected_row.get("numero_radicado_normalizado")
+            or expected_row.get("numero_radicado")
+            or f"id_caso:{expected_row.get('id_caso')}"
+        )
+        if radicado:
+            radicado_statuses.setdefault(str(radicado), []).append(status)
+
+        if status == ESTADO_CUMPLE:
             summary["cumplen"] += 1
         else:
             summary["pendientes"] += 1
-        if update_row["estado_revision_notificacion"] == ESTADO_NO_CRUZADO:
+        if status == ESTADO_NO_CRUZADO:
             summary["sin_correo_certificado"] += 1
+
+    if summary["notificaciones_evaluadas"]:
+        summary["porcentaje_notificaciones_validadas"] = round(
+            (summary["cumplen"] / summary["notificaciones_evaluadas"]) * 100,
+            2,
+        )
+
+    summary["radicados_evaluados"] = len(radicado_statuses)
+    summary["radicados_validados"] = sum(
+        1
+        for statuses in radicado_statuses.values()
+        if statuses and all(status == ESTADO_CUMPLE for status in statuses)
+    )
+    summary["radicados_pendientes"] = (
+        summary["radicados_evaluados"] - summary["radicados_validados"]
+    )
+    if summary["radicados_evaluados"]:
+        summary["porcentaje_radicados_validados"] = round(
+            (summary["radicados_validados"] / summary["radicados_evaluados"]) * 100,
+            2,
+        )
 
     summary["notificaciones_actualizadas"] = db.execute_many_updates(
         "jnc.notificacion_esperada",
