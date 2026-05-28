@@ -25,7 +25,7 @@ SCRIPT_VERSION = "1.0"
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def map_fields(row: dict[str, Any], field_map: dict[str, str]) -> dict[str, Any]:
@@ -90,6 +90,7 @@ def prepare_estructura_hoja_rows(id_archivo: int, result: dict[str, Any]) -> lis
             mapped_row[field_name] = json_dumps_safe(mapped_row.get(field_name))
 
         mapped_row["id_archivo"] = id_archivo
+        mapped_row["fecha_creacion"] = utc_now_iso()
         rows.append(mapped_row)
 
     return rows
@@ -107,9 +108,15 @@ def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str,
         mapped_row["nombre_paciente_normalizado"] = normalize_db_string(
             mapped_row.get("nombre_paciente")
         )
+        mapped_row["pestana_fecha"] = normalize_date(mapped_row.get("pestana_fecha"))
+        mapped_row["hoja_trabajo_fecha_audiencia"] = normalize_date(
+            mapped_row.get("hoja_trabajo_fecha_audiencia")
+        )
         mapped_row["fecha_pago_dictamen"] = normalize_date(mapped_row.get("fecha_pago_dictamen"))
         mapped_row["tabla_caso_json"] = json_dumps_safe(source_row)
+        mapped_row["origen_tabla"] = "tabla_casos"
         mapped_row["activo"] = 1
+        mapped_row["fecha_creacion"] = utc_now_iso()
 
         hash_payload = {
             key: value
@@ -160,7 +167,9 @@ def prepare_notificacion_rows(
             )
 
         mapped_row["tabla_notificacion_json"] = json_dumps_safe(source_row)
+        mapped_row["origen_tabla"] = "tabla_notificaciones"
         mapped_row["activo"] = 1
+        mapped_row["fecha_creacion"] = utc_now_iso()
 
         hash_payload = {
             key: value
@@ -195,8 +204,11 @@ def prepare_correo_certificado_rows(
         mapped_row["destinatario_nombre_normalizado"] = normalize_db_string(
             source_row.get("nombres")
         )
+        mapped_row["nombres"] = source_row.get("nombres")
+        mapped_row["correo"] = source_row.get("correo")
         mapped_row["asunto_normalizado"] = normalize_db_string(source_row.get("asunto"))
         mapped_row["fila_correo_certificado_json"] = json_dumps_safe(source_row)
+        mapped_row["fecha_creacion"] = utc_now_iso()
 
         hash_payload = {
             key: value
@@ -222,6 +234,7 @@ def prepare_error_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str
                 "hoja_origen": error.get("pestana"),
                 "severidad": "ERROR",
                 "requiere_revision": 1,
+                "fecha_error": utc_now_iso(),
                 "detalle_error_json": json_dumps_safe(error),
             }
         )
@@ -247,6 +260,7 @@ def _regla_row(
         "registros_afectados": registros_afectados,
         "resultado": resultado,
         "observacion": observacion,
+        "fecha_ejecucion": utc_now_iso(),
     }
 
 

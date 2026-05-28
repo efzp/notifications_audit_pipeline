@@ -65,6 +65,11 @@ def normalize_date(value: Any) -> str | None:
     if clean_value is None:
         return None
 
+    try:
+        return datetime.fromisoformat(clean_value).date().isoformat()
+    except ValueError:
+        pass
+
     for date_format in (
         "%Y-%m-%d",
         "%Y-%m-%d %H:%M:%S",
@@ -88,7 +93,7 @@ def json_dumps_safe(value: Any) -> str | None:
     if value is None:
         return None
 
-    return json.dumps(value, ensure_ascii=False, default=str)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def sha256_text(value: str) -> str:

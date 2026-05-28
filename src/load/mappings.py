@@ -1,10 +1,22 @@
 CASO_FIELD_MAP: dict[str, str] = {
     "pestana_nombre": "pestana_nombre",
+    "pestana_fecha": "pestana_fecha",
     "pestana_sala_normalizada": "pestana_sala_normalizada",
+    "hoja_trabajo_sala": "hoja_trabajo_sala",
     "hoja_trabajo_sala_normalizada": "hoja_trabajo_sala_normalizada",
+    "hoja_trabajo_fecha_audiencia": "hoja_trabajo_fecha_audiencia",
     "numero_radicado": "numero_radicado",
     "nombre_del_paciente": "nombre_paciente",
+    "entidad_remitente": "entidad_remitente",
+    "regional": "regional",
+    "medico_ponente": "medico_ponente",
+    "medico_principal": "medico_principal",
+    "responsable_del_pago": "responsable_pago",
+    "pago_entidad": "pago_entidad",
+    "rp": "rp",
+    "terapeuta_o_psicologa": "terapeuta_psicologa",
     "fecha_pago_dictamen": "fecha_pago_dictamen",
+    "valor": "valor_reportado",
     "correo_guia": "correo_guia",
 }
 
@@ -19,6 +31,7 @@ NOTIFICACION_FIELD_MAP: dict[str, str] = {
     "pestana_nombre": "pestana_nombre",
     "pestana_fecha": "pestana_fecha",
     "pestana_sala_normalizada": "pestana_sala_normalizada",
+    "hoja_trabajo_sala": "hoja_trabajo_sala",
     "hoja_trabajo_sala_normalizada": "hoja_trabajo_sala_normalizada",
     "hoja_trabajo_fecha_audiencia": "hoja_trabajo_fecha_audiencia",
 }
@@ -45,8 +58,6 @@ ESTRUCTURA_HOJA_FIELD_MAP: dict[str, str] = {
     "estructura_umbral": "estructura_umbral",
     "estructura_campos_esperados": "estructura_campos_esperados",
     "estructura_campos_encontrados": "estructura_campos_encontrados",
-    "fila_encabezado_wide_terminos": "fila_encabezado_wide_terminos_json",
-    "fila_encabezado_detalle_terminos": "fila_encabezado_detalle_terminos_json",
     "ubicacion_columnas_wide": "ubicacion_columnas_wide_json",
     "ubicacion_columnas_detalle": "ubicacion_columnas_detalle_json",
     "estructura_faltantes": "estructura_faltantes_json",
@@ -61,6 +72,8 @@ CORREO_CERTIFICADO_FIELD_MAP: dict[str, str] = {
     "nombres": "destinatario_nombre",
     "correo": "destinatario_email",
     "asunto": "asunto",
+    "evento": "estado_correo",
+    "id": "codigo_certificado",
     "adjuntos": "adjuntos",
     "numeros_asunto": "numeros_asunto_json",
     "numeros_adjuntos": "numeros_adjuntos_json",
@@ -68,8 +81,6 @@ CORREO_CERTIFICADO_FIELD_MAP: dict[str, str] = {
 
 
 ESTRUCTURA_HOJA_JSON_FIELDS: set[str] = {
-    "fila_encabezado_wide_terminos_json",
-    "fila_encabezado_detalle_terminos_json",
     "ubicacion_columnas_wide_json",
     "ubicacion_columnas_detalle_json",
     "estructura_faltantes_json",
