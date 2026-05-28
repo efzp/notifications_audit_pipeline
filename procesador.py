@@ -123,17 +123,24 @@ EXCLUDED_NOTIFICATION_EMAIL_VALUES = {
     "no_informado",
     "no_reporta",
     "no_reportan",
+    "independiente",
+    "no_cuenta",
+    "no_refiere",
     "sin_correo",
     "sin_email",
 }
-EXCLUDED_NOTIFICATION_EMAIL_PHRASES = {
-    "no_aplica",
+EXCLUDED_NOTIFICATION_EMAIL_FUZZY_VALUES = {
+    "independiente",
+    "no_cuenta",
+    "no_refiere",
+}
+EXCLUDED_NOTIFICATION_EMAIL_FUZZY_PHRASES = {
+    "independiente",
+    "no_cuenta",
+    "no_refiere",
     "no_informa",
-    "no_informan",
-    "no_reporta",
-    "sin_correo",
-    "sin_email",
 }
+EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD = 0.88
 
 ROW_METADATA_FIELDS = {
     "pestana_nombre": "pestana_nombre",
@@ -706,11 +713,39 @@ def should_skip_notification_email(value: object) -> bool:
     if normalized_value in EXCLUDED_NOTIFICATION_EMAIL_VALUES:
         return True
 
-    if any(phrase in normalized_value for phrase in EXCLUDED_NOTIFICATION_EMAIL_PHRASES):
+    if "@" not in raw_value and any(
+        SequenceMatcher(None, normalized_value, excluded_value).ratio()
+        >= EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD
+        for excluded_value in EXCLUDED_NOTIFICATION_EMAIL_FUZZY_VALUES
+    ):
+        return True
+
+    if "@" not in raw_value and should_skip_by_fuzzy_phrase(normalized_value):
         return True
 
     if "@" not in raw_value and re.fullmatch(r"[\d\s.,/\-]+", raw_value):
         return True
+
+    return False
+
+
+def should_skip_by_fuzzy_phrase(normalized_value: str) -> bool:
+    parts = [part for part in normalized_value.split("_") if part]
+    if not parts:
+        return False
+
+    for excluded_phrase in EXCLUDED_NOTIFICATION_EMAIL_FUZZY_PHRASES:
+        phrase_size = len(excluded_phrase.split("_"))
+        if len(parts) < phrase_size:
+            continue
+
+        for index in range(len(parts) - phrase_size + 1):
+            window = "_".join(parts[index : index + phrase_size])
+            if (
+                SequenceMatcher(None, window, excluded_phrase).ratio()
+                >= EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD
+            ):
+                return True
 
     return False
 

@@ -26,6 +26,7 @@ ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
 PLAZO_DIAS_CALENDARIO = 2
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+MAX_EMAIL_LOCAL_PART_DISTANCE = 2
 
 
 def utc_now_iso() -> str:
@@ -302,6 +303,113 @@ def _extract_expected_emails(row: dict[str, Any]) -> list[str]:
     return emails
 
 
+def _email_parts(email: str | None) -> tuple[str, str] | None:
+    if not email or "@" not in email:
+        return None
+
+    local_part, domain = email.rsplit("@", 1)
+    if not local_part or not domain:
+        return None
+
+    return local_part, domain
+
+
+def _levenshtein_distance_limited(left: str, right: str, max_distance: int) -> int:
+    if left == right:
+        return 0
+
+    if abs(len(left) - len(right)) > max_distance:
+        return max_distance + 1
+
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        row_min = current[0]
+        for right_index, right_char in enumerate(right, start=1):
+            cost = 0 if left_char == right_char else 1
+            value = min(
+                previous[right_index] + 1,
+                current[right_index - 1] + 1,
+                previous[right_index - 1] + cost,
+            )
+            current.append(value)
+            row_min = min(row_min, value)
+
+        if row_min > max_distance:
+            return max_distance + 1
+
+        previous = current
+
+    return previous[-1]
+
+
+def _match_expected_email(
+    expected_emails: list[str],
+    correo_email: str | None,
+) -> dict[str, Any]:
+    if not correo_email:
+        return {
+            "cumple_correo": False,
+            "tipo_match_correo": None,
+            "correo_esperado_match": None,
+            "distancia_correo": None,
+        }
+
+    if correo_email in expected_emails:
+        return {
+            "cumple_correo": True,
+            "tipo_match_correo": "EXACTO",
+            "correo_esperado_match": correo_email,
+            "distancia_correo": 0,
+        }
+
+    correo_parts = _email_parts(correo_email)
+    if correo_parts is None:
+        return {
+            "cumple_correo": False,
+            "tipo_match_correo": None,
+            "correo_esperado_match": None,
+            "distancia_correo": None,
+        }
+
+    correo_local, correo_domain = correo_parts
+    best_match = None
+    best_distance = MAX_EMAIL_LOCAL_PART_DISTANCE + 1
+
+    for expected_email in expected_emails:
+        expected_parts = _email_parts(expected_email)
+        if expected_parts is None:
+            continue
+
+        expected_local, expected_domain = expected_parts
+        if expected_domain != correo_domain:
+            continue
+
+        distance = _levenshtein_distance_limited(
+            expected_local,
+            correo_local,
+            MAX_EMAIL_LOCAL_PART_DISTANCE,
+        )
+        if distance < best_distance:
+            best_match = expected_email
+            best_distance = distance
+
+    if best_match is not None and 0 < best_distance <= MAX_EMAIL_LOCAL_PART_DISTANCE:
+        return {
+            "cumple_correo": True,
+            "tipo_match_correo": "FUZZY_LOCAL_PART",
+            "correo_esperado_match": best_match,
+            "distancia_correo": best_distance,
+        }
+
+    return {
+        "cumple_correo": False,
+        "tipo_match_correo": None,
+        "correo_esperado_match": expected_emails[0] if expected_emails else None,
+        "distancia_correo": best_distance if best_match is not None else None,
+    }
+
+
 def _score_candidate(
     expected_row: dict[str, Any],
     correo_row: dict[str, Any],
@@ -321,7 +429,8 @@ def _score_candidate(
     )
     asunto_ok, asunto_score, asunto_topic = _validate_asunto(correo_row.get("asunto"))
     evento_ok, evento_score, evento_type = _validate_evento(correo_row.get("estado_correo"))
-    correo_ok = bool(correo_email and correo_email in expected_emails)
+    email_match = _match_expected_email(expected_emails, correo_email)
+    correo_ok = email_match["cumple_correo"]
     days_after_audience = _days_between(audience_date, correo_date)
     plazo_ok = (
         days_after_audience is not None
@@ -346,8 +455,10 @@ def _score_candidate(
         "asunto_tipo_match": asunto_topic,
         "evento_tipo_match": evento_type,
         "correos_esperados": expected_emails,
-        "correo_esperado": correo_email if correo_ok else (expected_emails[0] if expected_emails else None),
+        "correo_esperado": email_match["correo_esperado_match"],
         "correo_certificado": correo_email,
+        "tipo_match_correo": email_match["tipo_match_correo"],
+        "distancia_correo": email_match["distancia_correo"],
         "fecha_audiencia": normalize_date(audience_date),
         "fecha_envio_certificado": normalize_date(correo_date),
         "dias_despues_audiencia": days_after_audience,
@@ -457,6 +568,8 @@ def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | 
         "correos_esperados": candidate.get("correos_esperados") if candidate else [],
         "correo_esperado": candidate.get("correo_esperado") if candidate else None,
         "correo_certificado": candidate.get("correo_certificado") if candidate else None,
+        "tipo_match_correo": candidate.get("tipo_match_correo") if candidate else None,
+        "distancia_correo": candidate.get("distancia_correo") if candidate else None,
         "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
         "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
         "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
