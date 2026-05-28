@@ -331,6 +331,52 @@ def execute_update(table_name: str, key_column: str, key_value: Any, values: dic
     return _execute_with_optional_own_connection(operation)
 
 
+def execute_many_updates(
+    table_name: str,
+    key_column: str,
+    rows: list[dict[str, Any]],
+) -> int:
+    if not rows:
+        return 0
+
+    table_columns = get_table_columns(table_name)
+    columns = [
+        column_name
+        for column_name in rows[0].keys()
+        if column_name in table_columns and column_name != key_column
+    ]
+    if not columns:
+        return 0
+
+    quoted_table = quote_table_name(table_name)
+    quoted_key = quote_column_name(key_column)
+    assignments = ", ".join(
+        f"{quote_column_name(column_name)} = ?" for column_name in columns
+    )
+    sql = f"UPDATE {quoted_table} SET {assignments} WHERE {quoted_key} = ?"
+
+    coerced_rows = [coerce_values_to_table_types(table_name, row) for row in rows]
+    params = [
+        tuple(row.get(column_name) for column_name in columns) + (row.get(key_column),)
+        for row in coerced_rows
+        if row.get(key_column) is not None
+    ]
+    if not params:
+        return 0
+
+    def operation(connection):
+        cursor = connection.cursor()
+        cursor.fast_executemany = os.environ.get("SQL_FAST_EXECUTEMANY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        cursor.executemany(sql, params)
+        return len(params)
+
+    return _execute_with_optional_own_connection(operation)
+
+
 def insert_many(table_name: str, rows: list[dict[str, Any]]) -> int:
     if not rows:
         return 0

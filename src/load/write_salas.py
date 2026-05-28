@@ -10,6 +10,7 @@ from src.load.prepare_sql_rows import (
     prepare_regla_rows,
 )
 from src.load.timing import timed_step
+from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 
 
 def _fetch_case_id_map(id_archivo: int) -> dict[str, int]:
@@ -39,6 +40,7 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         "notificaciones_insertadas": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
+        "cruce_notificaciones": {},
         "timings": {},
         "mensaje": "Resultado de salas escrito en Azure SQL",
     }
@@ -163,6 +165,16 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                 archivo_update,
             ),
         )
+
+        if result.get("status") == "OK":
+            summary["cruce_notificaciones"] = timed_step(
+                timings,
+                "recalcular_cruce_notificaciones",
+                lambda: recalcular_cruce_notificaciones(
+                    id_archivo_salas=id_archivo,
+                    solo_pendientes=False,
+                ),
+            )
 
         if result.get("status") != "OK":
             summary["status"] = "ERROR"

@@ -1,0 +1,493 @@
+import json
+import re
+import unicodedata
+from datetime import date, datetime, timezone
+from difflib import SequenceMatcher
+from typing import Any
+
+from src.load import db
+from src.utils.normalization import (
+    json_dumps_safe,
+    normalize_date,
+    normalize_document,
+    normalize_email,
+)
+
+
+ESTADO_CUMPLE = "CUMPLE"
+ESTADO_NO_CRUZADO = "NO_CRUZADO"
+ESTADO_DOCUMENTO_NO_ENCONTRADO = "DOCUMENTO_NO_ENCONTRADO"
+ESTADO_ASUNTO_NO_VALIDO = "ASUNTO_NO_VALIDO"
+ESTADO_EVENTO_NO_VALIDO = "EVENTO_NO_VALIDO"
+ESTADO_CORREO_NO_COINCIDE = "CORREO_NO_COINCIDE"
+ESTADO_FUERA_DE_PLAZO = "FUERA_DE_PLAZO"
+ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
+
+PLAZO_DIAS_CALENDARIO = 2
+FUZZY_THRESHOLD = 0.82
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _normalize_match_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    normalized = unicodedata.normalize("NFKD", str(value).lower())
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", " ", ascii_value).strip()
+
+
+def _tokens(value: Any) -> list[str]:
+    return _normalize_match_text(value).split()
+
+
+def _best_token_score(tokens: list[str], expected: str) -> float:
+    if not tokens:
+        return 0.0
+
+    return max(SequenceMatcher(None, token, expected).ratio() for token in tokens)
+
+
+def _contains_concept(tokens: list[str], expected: str, threshold: float = FUZZY_THRESHOLD) -> bool:
+    return _best_token_score(tokens, expected) >= threshold
+
+
+def _validate_asunto(asunto: Any) -> tuple[bool, float, str | None]:
+    text = _normalize_match_text(asunto)
+    tokens = text.split()
+    if not text:
+        return False, 0.0, None
+
+    communication_score = _best_token_score(tokens, "comunicacion")
+    dictamen_score = _best_token_score(tokens, "dictamen")
+    calificacion_score = _best_token_score(tokens, "calificacion")
+    topic_score = max(dictamen_score, calificacion_score)
+    score = round((communication_score + topic_score) / 2, 4)
+
+    if communication_score >= FUZZY_THRESHOLD and topic_score >= FUZZY_THRESHOLD:
+        matched_topic = "dictamen" if dictamen_score >= calificacion_score else "calificacion"
+        return True, score, matched_topic
+
+    return False, score, None
+
+
+def _validate_evento(evento: Any) -> tuple[bool, float, str | None]:
+    text = _normalize_match_text(evento)
+    tokens = text.split()
+    if not text:
+        return False, 0.0, None
+
+    acuse_score = _best_token_score(tokens, "acuse")
+    if acuse_score >= FUZZY_THRESHOLD:
+        return True, round(acuse_score, 4), "acuse"
+
+    lectura_score = _best_token_score(tokens, "lectura")
+    mensaje_score = _best_token_score(tokens, "mensaje")
+    lectura_total = round((lectura_score + mensaje_score) / 2, 4)
+    if lectura_score >= FUZZY_THRESHOLD and mensaje_score >= FUZZY_THRESHOLD:
+        return True, lectura_total, "lectura_mensaje"
+
+    destinatario_score = _best_token_score(tokens, "destinatario")
+    abrio_score = max(
+        _best_token_score(tokens, "abrio"),
+        _best_token_score(tokens, "abierto"),
+        _best_token_score(tokens, "apertura"),
+    )
+    notificacion_score = _best_token_score(tokens, "notificacion")
+    apertura_total = round(
+        (destinatario_score + abrio_score + notificacion_score) / 3,
+        4,
+    )
+    if (
+        destinatario_score >= FUZZY_THRESHOLD
+        and abrio_score >= FUZZY_THRESHOLD
+        and notificacion_score >= FUZZY_THRESHOLD
+    ):
+        return True, apertura_total, "destinatario_abrio_notificacion"
+
+    return False, max(acuse_score, lectura_total, apertura_total), None
+
+
+def _load_json_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        return [value]
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+
+    return parsed if isinstance(parsed, list) else [parsed]
+
+
+def _extract_document_numbers(value: Any) -> set[str]:
+    if value is None:
+        return set()
+
+    documents = set()
+    for match in re.finditer(r"\d(?:[\d.,\s-]*\d){5,}", str(value)):
+        document = normalize_document(match.group(0))
+        if document:
+            documents.add(document)
+
+    return documents
+
+
+def _document_candidates(row: dict[str, Any]) -> set[str]:
+    documents = set()
+    for field_name in ("numeros_asunto_json", "numeros_adjuntos_json"):
+        for value in _load_json_list(row.get(field_name)):
+            document = normalize_document(value)
+            if document:
+                documents.add(document)
+
+    for field_name in ("asunto", "adjuntos"):
+        documents.update(_extract_document_numbers(row.get(field_name)))
+
+    return documents
+
+
+def _document_matches(expected_document: str, correo_row: dict[str, Any]) -> tuple[bool, str | None]:
+    asunto_documents = {
+        normalize_document(value)
+        for value in _load_json_list(correo_row.get("numeros_asunto_json"))
+    }
+    adjunto_documents = {
+        normalize_document(value)
+        for value in _load_json_list(correo_row.get("numeros_adjuntos_json"))
+    }
+
+    if expected_document in asunto_documents:
+        return True, "asunto"
+    if expected_document in adjunto_documents:
+        return True, "adjuntos"
+
+    asunto_documents_from_text = _extract_document_numbers(correo_row.get("asunto"))
+    adjunto_documents_from_text = _extract_document_numbers(correo_row.get("adjuntos"))
+    if expected_document and expected_document in asunto_documents_from_text:
+        return True, "asunto"
+    if expected_document and expected_document in adjunto_documents_from_text:
+        return True, "adjuntos"
+
+    return False, None
+
+
+def _parse_date(value: Any) -> date | None:
+    normalized = normalize_date(value)
+    if not normalized:
+        return None
+
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        return None
+
+
+def _days_between(start_value: Any, end_value: Any) -> int | None:
+    start_date = _parse_date(start_value)
+    end_date = _parse_date(end_value)
+    if start_date is None or end_date is None:
+        return None
+
+    return (end_date - start_date).days
+
+
+def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
+    base_columns = [
+        "id_notificacion_esperada",
+        "id_archivo",
+        "id_caso",
+        "numero_radicado",
+        "numero_radicado_normalizado",
+        "cedula",
+        "cedula_normalizada",
+        "tipo_destinatario",
+        "correo_o_guia_reportado",
+        "correo_normalizado",
+        "hoja_trabajo_fecha_audiencia",
+        "fecha_envio_reportada",
+        "activo",
+    ]
+    optional_columns = [
+        "estado_revision_notificacion",
+        "pendiente_revision",
+        "id_notificacion_correo_certificado_match",
+        "fecha_revision_notificacion",
+        "detalle_revision_json",
+    ]
+    table_columns = db.get_table_columns("jnc.notificacion_esperada")
+    columns = [column for column in [*base_columns, *optional_columns] if column in table_columns]
+
+    where = "[activo] = 1"
+    params: list[Any] = []
+    if id_archivo_salas is not None:
+        where += " AND [id_archivo] = ?"
+        params.append(id_archivo_salas)
+
+    return db.fetch_rows("jnc.notificacion_esperada", columns, where, params)
+
+
+def _fetch_correo_rows() -> list[dict[str, Any]]:
+    columns = [
+        "id_notificacion_correo",
+        "id_archivo",
+        "numero_linea_csv",
+        "fecha",
+        "fecha_2",
+        "fecha_3",
+        "destinatario_email",
+        "destinatario_email_normalizado",
+        "correo",
+        "asunto",
+        "adjuntos",
+        "estado_correo",
+        "numeros_asunto_json",
+        "numeros_adjuntos_json",
+    ]
+    table_columns = db.get_table_columns("jnc.notificacion_correo_certificado")
+    existing_columns = [column for column in columns if column in table_columns]
+    return db.fetch_rows("jnc.notificacion_correo_certificado", existing_columns, "1 = 1", [])
+
+
+def _build_correo_index(correo_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in correo_rows:
+        for document in _document_candidates(row):
+            index.setdefault(document, []).append(row)
+    return index
+
+
+def _correo_date(row: dict[str, Any]) -> Any:
+    return row.get("fecha") or row.get("fecha_2") or row.get("fecha_3")
+
+
+def _correo_email(row: dict[str, Any]) -> str | None:
+    return normalize_email(
+        row.get("destinatario_email_normalizado")
+        or row.get("destinatario_email")
+        or row.get("correo")
+    )
+
+
+def _score_candidate(
+    expected_row: dict[str, Any],
+    correo_row: dict[str, Any],
+) -> dict[str, Any]:
+    expected_document = normalize_document(
+        expected_row.get("cedula_normalizada") or expected_row.get("cedula")
+    )
+    expected_email = normalize_email(
+        expected_row.get("correo_normalizado") or expected_row.get("correo_o_guia_reportado")
+    )
+    correo_email = _correo_email(correo_row)
+    correo_date = _correo_date(correo_row)
+    audience_date = expected_row.get("hoja_trabajo_fecha_audiencia")
+
+    document_ok, document_source = (
+        _document_matches(expected_document, correo_row)
+        if expected_document
+        else (False, None)
+    )
+    asunto_ok, asunto_score, asunto_topic = _validate_asunto(correo_row.get("asunto"))
+    evento_ok, evento_score, evento_type = _validate_evento(correo_row.get("estado_correo"))
+    correo_ok = bool(expected_email and correo_email and expected_email == correo_email)
+    days_after_audience = _days_between(audience_date, correo_date)
+    plazo_ok = (
+        days_after_audience is not None
+        and 0 <= days_after_audience <= PLAZO_DIAS_CALENDARIO
+    )
+
+    checks = {
+        "cumple_documento": document_ok,
+        "cumple_asunto": asunto_ok,
+        "cumple_evento": evento_ok,
+        "cumple_correo": correo_ok,
+        "cumple_plazo": plazo_ok,
+    }
+    total_score = sum(1 for value in checks.values() if value)
+
+    return {
+        **checks,
+        "score_total": total_score,
+        "score_asunto": asunto_score,
+        "score_evento": evento_score,
+        "fuente_documento_match": document_source,
+        "asunto_tipo_match": asunto_topic,
+        "evento_tipo_match": evento_type,
+        "correo_esperado": expected_email,
+        "correo_certificado": correo_email,
+        "fecha_audiencia": normalize_date(audience_date),
+        "fecha_envio_certificado": normalize_date(correo_date),
+        "dias_despues_audiencia": days_after_audience,
+        "correo_row": correo_row,
+    }
+
+
+def _status_from_candidate(candidate: dict[str, Any] | None, has_document_candidates: bool) -> tuple[str, str]:
+    if candidate is None:
+        if has_document_candidates:
+            return ESTADO_DOCUMENTO_NO_ENCONTRADO, (
+                "Se encontraron correos certificados, pero la cedula no aparece en asunto ni adjuntos"
+            )
+        return ESTADO_NO_CRUZADO, "No se encontro evidencia de correo certificado para la cedula"
+
+    if all(
+        candidate.get(field_name)
+        for field_name in (
+            "cumple_documento",
+            "cumple_asunto",
+            "cumple_evento",
+            "cumple_correo",
+            "cumple_plazo",
+        )
+    ):
+        return ESTADO_CUMPLE, "Notificacion validada contra correo certificado"
+
+    if not candidate.get("cumple_asunto"):
+        return ESTADO_ASUNTO_NO_VALIDO, (
+            "El asunto no corresponde a comunicacion de dictamen o calificacion"
+        )
+    if not candidate.get("cumple_evento"):
+        return ESTADO_EVENTO_NO_VALIDO, (
+            "El evento no evidencia acuse, lectura o apertura de la notificacion"
+        )
+    if not candidate.get("cumple_correo"):
+        return ESTADO_CORREO_NO_COINCIDE, (
+            "El correo certificado no coincide con el correo reportado en la notificacion esperada"
+        )
+    if not candidate.get("cumple_plazo"):
+        return ESTADO_FUERA_DE_PLAZO, (
+            "La fecha de envio certificado supera el plazo de 2 dias calendario desde la audiencia"
+        )
+
+    return ESTADO_REQUIERE_REVISION, "La evidencia encontrada requiere revision manual"
+
+
+def _best_candidate(
+    expected_row: dict[str, Any],
+    correo_index: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, bool]:
+    expected_document = normalize_document(
+        expected_row.get("cedula_normalizada") or expected_row.get("cedula")
+    )
+    if not expected_document:
+        return None, False
+
+    candidates = correo_index.get(expected_document, [])
+    if not candidates:
+        return None, False
+
+    scored_candidates = [_score_candidate(expected_row, row) for row in candidates]
+    scored_candidates.sort(
+        key=lambda item: (
+            item["score_total"],
+            item["score_evento"],
+            item["score_asunto"],
+            -(item["dias_despues_audiencia"] or 9999),
+        ),
+        reverse=True,
+    )
+    return scored_candidates[0], True
+
+
+def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | None, has_document_candidates: bool) -> dict[str, Any]:
+    status, pending_detail = _status_from_candidate(candidate, has_document_candidates)
+    correo_row = candidate.get("correo_row") if candidate else None
+
+    detail = {
+        "estado_revision_notificacion": status,
+        "pendiente_revision": pending_detail,
+        "numero_radicado_normalizado": expected_row.get("numero_radicado_normalizado"),
+        "cedula_normalizada": expected_row.get("cedula_normalizada"),
+        "tipo_destinatario": expected_row.get("tipo_destinatario"),
+        "id_notificacion_correo_certificado_match": correo_row.get("id_notificacion_correo")
+        if correo_row
+        else None,
+        "id_archivo_correo_certificado_match": correo_row.get("id_archivo")
+        if correo_row
+        else None,
+        "numero_linea_csv_match": correo_row.get("numero_linea_csv") if correo_row else None,
+        "checks": {
+            key: candidate.get(key) if candidate else False
+            for key in (
+                "cumple_documento",
+                "cumple_asunto",
+                "cumple_evento",
+                "cumple_correo",
+                "cumple_plazo",
+            )
+        },
+        "score_asunto": candidate.get("score_asunto") if candidate else None,
+        "score_evento": candidate.get("score_evento") if candidate else None,
+        "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
+        "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
+        "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
+        "correo_esperado": candidate.get("correo_esperado") if candidate else None,
+        "correo_certificado": candidate.get("correo_certificado") if candidate else None,
+        "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
+        "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
+        "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
+    }
+
+    return {
+        "id_notificacion_esperada": expected_row["id_notificacion_esperada"],
+        "estado_revision_notificacion": status,
+        "pendiente_revision": pending_detail,
+        "id_notificacion_correo_certificado_match": correo_row.get("id_notificacion_correo")
+        if correo_row
+        else None,
+        "fecha_revision_notificacion": utc_now_iso(),
+        "detalle_revision_json": json_dumps_safe(detail),
+        "fecha_actualizacion": utc_now_iso(),
+    }
+
+
+def recalcular_cruce_notificaciones(
+    id_archivo_salas: int | None = None,
+    solo_pendientes: bool = True,
+) -> dict[str, Any]:
+    expected_rows = _fetch_expected_rows(id_archivo_salas)
+    if solo_pendientes:
+        expected_rows = [
+            row
+            for row in expected_rows
+            if row.get("estado_revision_notificacion") != ESTADO_CUMPLE
+        ]
+
+    correo_rows = _fetch_correo_rows()
+    correo_index = _build_correo_index(correo_rows)
+
+    updates = []
+    summary = {
+        "notificaciones_evaluadas": len(expected_rows),
+        "notificaciones_actualizadas": 0,
+        "cumplen": 0,
+        "pendientes": 0,
+        "sin_correo_certificado": 0,
+    }
+
+    for expected_row in expected_rows:
+        candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
+        update_row = _build_update_row(expected_row, candidate, has_document_candidates)
+        updates.append(update_row)
+
+        if update_row["estado_revision_notificacion"] == ESTADO_CUMPLE:
+            summary["cumplen"] += 1
+        else:
+            summary["pendientes"] += 1
+        if update_row["estado_revision_notificacion"] == ESTADO_NO_CRUZADO:
+            summary["sin_correo_certificado"] += 1
+
+    summary["notificaciones_actualizadas"] = db.execute_many_updates(
+        "jnc.notificacion_esperada",
+        "id_notificacion_esperada",
+        updates,
+    )
+    return summary
