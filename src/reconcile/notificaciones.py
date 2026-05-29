@@ -523,10 +523,14 @@ def _best_candidate(
     scored_candidates = [_score_candidate(expected_row, row) for row in candidates]
     scored_candidates.sort(
         key=lambda item: (
+            item["cumple_documento"],
+            item["cumple_asunto"],
+            item["cumple_evento"],
+            item["cumple_correo"],
+            item["cumple_plazo"],
             item["score_total"],
             item["score_evento"],
             item["score_asunto"],
-            -(item["dias_despues_audiencia"] or 9999),
         ),
         reverse=True,
     )

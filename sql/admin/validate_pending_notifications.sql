@@ -1,18 +1,15 @@
 /*
-Resumen de validacion por radicado, cedula y campo original.
+Detalle directo de radicados que no cumplen.
 
-Regla aplicada:
-- Cada fila de notificacion_esperada representa un correo extraido.
-- Varios correos pueden venir del mismo campo original de Excel.
-- El campo original se considera cumplido si al menos uno de sus correos
-  quedo en estado CUMPLE.
-- El radicado/cedula se considera CUMPLE si todos sus campos originales
-  cumplen.
+Incluye registros que fallan por:
+- FUERA_DE_PLAZO: el envio certificado no esta dentro de los 2 dias calendario.
+- CAMPO_SIN_ENVIO_VALIDO: el campo original no tiene ningun correo en CUMPLE.
+- TEXTO_NO_VALIDO: asunto o evento no coinciden con los textos aceptados.
 
 Para validar todos los casos, cambiar @cedula_a_validar a NULL.
 */
 
-DECLARE @cedula_a_validar NVARCHAR(100) = '35410378';
+DECLARE @cedula_a_validar NVARCHAR(100) = NULL;
 
 WITH base AS (
     SELECT
@@ -27,19 +24,32 @@ WITH base AS (
         COALESCE(ne.estado_revision_notificacion, 'SIN_REVISION')
             AS estado_revision_notificacion,
         ne.pendiente_revision,
+        ne.fecha_revision_notificacion,
+        ne.id_notificacion_correo_certificado_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.id_archivo_correo_certificado_match')
+            AS id_archivo_correo_certificado_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.numero_linea_csv_match')
+            AS numero_linea_csv_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.correo_certificado')
+            AS correo_certificado_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.correo_esperado')
+            AS correo_esperado_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.fecha_envio_certificado')
+            AS fecha_envio_certificado_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.dias_despues_audiencia')
+            AS dias_despues_audiencia,
+        JSON_VALUE(ne.detalle_revision_json, '$.score_asunto')
+            AS score_asunto,
+        JSON_VALUE(ne.detalle_revision_json, '$.score_evento')
+            AS score_evento,
+        JSON_VALUE(ne.detalle_revision_json, '$.asunto_tipo_match')
+            AS asunto_tipo_match,
+        JSON_VALUE(ne.detalle_revision_json, '$.evento_tipo_match')
+            AS evento_tipo_match,
         ac.nombre_archivo,
         ne.pestana_nombre AS hoja_excel,
         ne.hoja_trabajo_sala,
-        ne.hoja_trabajo_fecha_audiencia,
-        CONCAT(
-            COALESCE(ac.nombre_archivo, 'SIN_ARCHIVO'),
-            ' | hoja: ',
-            COALESCE(ne.pestana_nombre, 'SIN_HOJA'),
-            ' | sala: ',
-            COALESCE(ne.hoja_trabajo_sala, 'SIN_SALA'),
-            ' | fecha audiencia: ',
-            COALESCE(CONVERT(VARCHAR(10), ne.hoja_trabajo_fecha_audiencia, 120), 'SIN_FECHA')
-        ) AS ubicacion
+        ne.hoja_trabajo_fecha_audiencia
     FROM jnc.notificacion_esperada AS ne
     LEFT JOIN jnc.etl_archivo_cargado AS ac
         ON ac.id_archivo = ne.id_archivo
@@ -50,143 +60,76 @@ WITH base AS (
             OR CONVERT(NVARCHAR(100), ne.cedula) = @cedula_a_validar
         )
 ),
-campo_resumen AS (
+campo_estado AS (
     SELECT
         numero_radicado,
         cedula,
         campo_original,
-        ubicacion,
-        COUNT(*) AS correos_evaluados,
-        SUM(CASE WHEN estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END)
-            AS correos_cumplen,
-        SUM(CASE WHEN estado_revision_notificacion <> 'CUMPLE' THEN 1 ELSE 0 END)
-            AS correos_no_cumplen,
         MAX(CASE WHEN estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END)
-            AS campo_cumple
+            AS campo_tiene_envio_valido
     FROM base
     GROUP BY
         numero_radicado,
         cedula,
-        campo_original,
-        ubicacion
+        campo_original
 ),
-resumen AS (
+incumplimientos AS (
     SELECT
-        numero_radicado,
-        cedula,
-        COUNT(*) AS campos_originales,
-        SUM(correos_evaluados) AS total_correos_evaluados,
-        SUM(correos_cumplen) AS total_correos_cumplen,
-        SUM(correos_no_cumplen) AS total_correos_no_cumplen,
-        SUM(campo_cumple) AS campos_cumplen,
-        SUM(CASE WHEN campo_cumple = 0 THEN 1 ELSE 0 END) AS campos_no_cumplen
-    FROM campo_resumen
-    GROUP BY
-        numero_radicado,
-        cedula
-),
-ubicaciones AS (
-    SELECT DISTINCT
-        numero_radicado,
-        cedula,
-        ubicacion
-    FROM campo_resumen
-),
-ubicaciones_agg AS (
-    SELECT
-        numero_radicado,
-        cedula,
-        STRING_AGG(ubicacion, ' || ') AS archivos_y_hojas
-    FROM ubicaciones
-    GROUP BY
-        numero_radicado,
-        cedula
-),
-campos AS (
-    SELECT
-        numero_radicado,
-        cedula,
-        CONCAT(
-            campo_original,
-            ': ',
-            CASE WHEN campo_cumple = 1 THEN 'CUMPLE' ELSE 'NO_CUMPLE' END,
-            ' (correos cumplen ',
-            correos_cumplen,
-            '/',
-            correos_evaluados,
-            ')'
-        ) AS descripcion_campo
-    FROM campo_resumen
-),
-campos_agg AS (
-    SELECT
-        numero_radicado,
-        cedula,
-        STRING_AGG(descripcion_campo, ' || ') AS resumen_campos_originales
-    FROM campos
-    GROUP BY
-        numero_radicado,
-        cedula
-),
-errores AS (
-    SELECT DISTINCT
-        b.numero_radicado,
-        b.cedula,
-        CONCAT(
-            b.campo_original,
-            ' - ',
-            b.estado_revision_notificacion,
-            ': ',
-            COALESCE(b.pendiente_revision, 'Sin descripcion')
-        ) AS descripcion_error
+        b.*,
+        ce.campo_tiene_envio_valido,
+        CASE
+            WHEN b.estado_revision_notificacion = 'FUERA_DE_PLAZO'
+                THEN 'FUERA_DE_PLAZO'
+            WHEN b.estado_revision_notificacion IN ('ASUNTO_NO_VALIDO', 'EVENTO_NO_VALIDO')
+                THEN 'TEXTO_NO_VALIDO'
+            WHEN ce.campo_tiene_envio_valido = 0
+                THEN 'CAMPO_SIN_ENVIO_VALIDO'
+        END AS tipo_incumplimiento
     FROM base AS b
-    INNER JOIN campo_resumen AS cr
-        ON cr.numero_radicado = b.numero_radicado
-        AND cr.cedula = b.cedula
-        AND cr.campo_original = b.campo_original
-        AND cr.ubicacion = b.ubicacion
+    INNER JOIN campo_estado AS ce
+        ON ce.numero_radicado = b.numero_radicado
+        AND ce.cedula = b.cedula
+        AND ce.campo_original = b.campo_original
     WHERE
-        cr.campo_cumple = 0
-        AND b.estado_revision_notificacion <> 'CUMPLE'
-),
-errores_agg AS (
-    SELECT
-        numero_radicado,
-        cedula,
-        STRING_AGG(descripcion_error, ' || ') AS descripcion_error
-    FROM errores
-    GROUP BY
-        numero_radicado,
-        cedula
+        b.estado_revision_notificacion = 'FUERA_DE_PLAZO'
+        OR b.estado_revision_notificacion IN ('ASUNTO_NO_VALIDO', 'EVENTO_NO_VALIDO')
+        OR ce.campo_tiene_envio_valido = 0
 )
 SELECT
-    r.numero_radicado,
-    r.cedula,
-    r.campos_originales,
-    r.campos_cumplen,
-    r.campos_no_cumplen,
-    r.total_correos_evaluados,
-    r.total_correos_cumplen,
-    r.total_correos_no_cumplen,
-    CASE
-        WHEN r.campos_no_cumplen = 0 THEN 'CUMPLE'
-        WHEN r.campos_cumplen > 0 THEN 'CUMPLE_PARCIAL'
-        ELSE 'NO_CUMPLE'
-    END AS estado_resumen,
-    u.archivos_y_hojas,
-    c.resumen_campos_originales,
-    e.descripcion_error
-FROM resumen AS r
-LEFT JOIN ubicaciones_agg AS u
-    ON u.numero_radicado = r.numero_radicado
-    AND u.cedula = r.cedula
-LEFT JOIN campos_agg AS c
-    ON c.numero_radicado = r.numero_radicado
-    AND c.cedula = r.cedula
-LEFT JOIN errores_agg AS e
-    ON e.numero_radicado = r.numero_radicado
-    AND e.cedula = r.cedula
+    numero_radicado,
+    cedula,
+    campo_original,
+    tipo_incumplimiento,
+    estado_revision_notificacion,
+    pendiente_revision AS descripcion_error,
+    correo_o_guia_reportado,
+    correo_esperado_match,
+    correo_certificado_match,
+    hoja_trabajo_fecha_audiencia,
+    fecha_envio_certificado_match,
+    dias_despues_audiencia,
+    nombre_archivo,
+    hoja_excel,
+    hoja_trabajo_sala,
+    id_notificacion_esperada,
+    id_notificacion_correo_certificado_match,
+    id_archivo_correo_certificado_match,
+    numero_linea_csv_match,
+    score_asunto,
+    score_evento,
+    asunto_tipo_match,
+    evento_tipo_match,
+    fecha_revision_notificacion
+FROM incumplimientos
 ORDER BY
-    r.campos_no_cumplen DESC,
-    r.numero_radicado,
-    r.cedula;
+    numero_radicado,
+    cedula,
+    campo_original,
+    CASE tipo_incumplimiento
+        WHEN 'CAMPO_SIN_ENVIO_VALIDO' THEN 1
+        WHEN 'FUERA_DE_PLAZO' THEN 2
+        WHEN 'TEXTO_NO_VALIDO' THEN 3
+        ELSE 4
+    END,
+    estado_revision_notificacion,
+    correo_o_guia_reportado;
