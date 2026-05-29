@@ -635,6 +635,20 @@ def _radicado_validado_por_campos(field_statuses: dict[str, list[str]]) -> bool:
     )
 
 
+def _radicado_extemporaneo_por_campos(field_statuses: dict[str, list[str]]) -> bool:
+    if not field_statuses or _radicado_validado_por_campos(field_statuses):
+        return False
+
+    return all(
+        any(status in {ESTADO_CUMPLE, ESTADO_FUERA_DE_PLAZO} for status in statuses)
+        for statuses in field_statuses.values()
+    ) and any(
+        not any(status == ESTADO_CUMPLE for status in statuses)
+        and any(status == ESTADO_FUERA_DE_PLAZO for status in statuses)
+        for statuses in field_statuses.values()
+    )
+
+
 def recalcular_cruce_notificaciones(
     id_archivo_salas: int | None = None,
     solo_pendientes: bool = True,
@@ -667,8 +681,10 @@ def recalcular_cruce_notificaciones(
         "porcentaje_notificaciones_validadas": 0.0,
         "radicados_evaluados": 0,
         "radicados_validados": 0,
+        "radicados_validados_extemporaneos": 0,
         "radicados_pendientes": 0,
         "porcentaje_radicados_validados": 0.0,
+        "porcentaje_radicados_validados_extemporaneos": 0.0,
     }
 
     for expected_row in expected_rows:
@@ -699,12 +715,27 @@ def recalcular_cruce_notificaciones(
         for field_statuses in radicado_statuses.values()
         if _radicado_validado_por_campos(field_statuses)
     )
+    summary["radicados_validados_extemporaneos"] = sum(
+        1
+        for field_statuses in radicado_statuses.values()
+        if _radicado_extemporaneo_por_campos(field_statuses)
+    )
     summary["radicados_pendientes"] = (
-        summary["radicados_evaluados"] - summary["radicados_validados"]
+        summary["radicados_evaluados"]
+        - summary["radicados_validados"]
+        - summary["radicados_validados_extemporaneos"]
     )
     if summary["radicados_evaluados"]:
         summary["porcentaje_radicados_validados"] = round(
             (summary["radicados_validados"] / summary["radicados_evaluados"]) * 100,
+            2,
+        )
+        summary["porcentaje_radicados_validados_extemporaneos"] = round(
+            (
+                summary["radicados_validados_extemporaneos"]
+                / summary["radicados_evaluados"]
+            )
+            * 100,
             2,
         )
 
