@@ -588,11 +588,55 @@ def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | 
     }
 
 
+def _radicado_key(row: dict[str, Any]) -> str | None:
+    radicado = (
+        row.get("numero_radicado_normalizado")
+        or row.get("numero_radicado")
+    )
+    if not radicado and row.get("id_caso"):
+        radicado = f"id_caso:{row.get('id_caso')}"
+
+    return str(radicado) if radicado else None
+
+
+def _campo_original_key(row: dict[str, Any]) -> str:
+    return str(row.get("tipo_destinatario") or "SIN_TIPO_DESTINATARIO")
+
+
+def _radicado_field_statuses(
+    expected_rows: list[dict[str, Any]],
+    status_by_expected_id: dict[Any, str],
+) -> dict[str, dict[str, list[str]]]:
+    statuses: dict[str, dict[str, list[str]]] = {}
+
+    for row in expected_rows:
+        radicado = _radicado_key(row)
+        if not radicado:
+            continue
+
+        field_key = _campo_original_key(row)
+        status = status_by_expected_id.get(
+            row.get("id_notificacion_esperada"),
+            row.get("estado_revision_notificacion") or "SIN_REVISION",
+        )
+        statuses.setdefault(radicado, {}).setdefault(field_key, []).append(status)
+
+    return statuses
+
+
+def _radicado_validado_por_campos(field_statuses: dict[str, list[str]]) -> bool:
+    return bool(field_statuses) and all(
+        any(status == ESTADO_CUMPLE for status in statuses)
+        for statuses in field_statuses.values()
+    )
+
+
 def recalcular_cruce_notificaciones(
     id_archivo_salas: int | None = None,
     solo_pendientes: bool = True,
 ) -> dict[str, Any]:
-    expected_rows = _fetch_expected_rows(id_archivo_salas)
+    all_expected_rows = _fetch_expected_rows(id_archivo_salas)
+    expected_rows = all_expected_rows
     if solo_pendientes:
         expected_rows = [
             row
@@ -604,7 +648,12 @@ def recalcular_cruce_notificaciones(
     correo_index = _build_correo_index(correo_rows)
 
     updates = []
-    radicado_statuses: dict[str, list[str]] = {}
+    status_by_expected_id = {
+        row.get("id_notificacion_esperada"): (
+            row.get("estado_revision_notificacion") or "SIN_REVISION"
+        )
+        for row in all_expected_rows
+    }
     summary = {
         "notificaciones_evaluadas": len(expected_rows),
         "notificaciones_actualizadas": 0,
@@ -624,13 +673,7 @@ def recalcular_cruce_notificaciones(
         updates.append(update_row)
 
         status = update_row["estado_revision_notificacion"]
-        radicado = (
-            expected_row.get("numero_radicado_normalizado")
-            or expected_row.get("numero_radicado")
-            or f"id_caso:{expected_row.get('id_caso')}"
-        )
-        if radicado:
-            radicado_statuses.setdefault(str(radicado), []).append(status)
+        status_by_expected_id[expected_row.get("id_notificacion_esperada")] = status
 
         if status == ESTADO_CUMPLE:
             summary["cumplen"] += 1
@@ -645,11 +688,12 @@ def recalcular_cruce_notificaciones(
             2,
         )
 
+    radicado_statuses = _radicado_field_statuses(all_expected_rows, status_by_expected_id)
     summary["radicados_evaluados"] = len(radicado_statuses)
     summary["radicados_validados"] = sum(
         1
-        for statuses in radicado_statuses.values()
-        if statuses and all(status == ESTADO_CUMPLE for status in statuses)
+        for field_statuses in radicado_statuses.values()
+        if _radicado_validado_por_campos(field_statuses)
     )
     summary["radicados_pendientes"] = (
         summary["radicados_evaluados"] - summary["radicados_validados"]
