@@ -628,23 +628,6 @@ def _radicado_field_statuses(
     return statuses
 
 
-def _expected_rows_by_radicado(expected_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    rows_by_radicado: dict[str, list[dict[str, Any]]] = {}
-
-    for row in expected_rows:
-        radicado = _radicado_key(row)
-        if not radicado:
-            continue
-
-        rows_by_radicado.setdefault(radicado, []).append(row)
-
-    return rows_by_radicado
-
-
-def _radicado_tiene_correo_esperado(expected_rows: list[dict[str, Any]]) -> bool:
-    return any(_extract_expected_emails(row) for row in expected_rows)
-
-
 def _radicado_validado_por_campos(field_statuses: dict[str, list[str]]) -> bool:
     return bool(field_statuses) and all(
         any(status == ESTADO_CUMPLE for status in statuses)
@@ -700,8 +683,6 @@ def recalcular_cruce_notificaciones(
         "radicados_validados": 0,
         "radicados_validados_extemporaneos": 0,
         "radicados_pendientes": 0,
-        "radicados_pendientes_con_correo": 0,
-        "radicados_pendientes_solo_texto": 0,
         "porcentaje_radicados_validados": 0.0,
         "porcentaje_radicados_validados_extemporaneos": 0.0,
     }
@@ -728,19 +709,15 @@ def recalcular_cruce_notificaciones(
         )
 
     radicado_statuses = _radicado_field_statuses(all_expected_rows, status_by_expected_id)
-    rows_by_radicado = _expected_rows_by_radicado(all_expected_rows)
     summary["radicados_evaluados"] = len(radicado_statuses)
     radicados_validados = set()
     radicados_extemporaneos = set()
-    radicados_pendientes = set()
 
     for radicado, field_statuses in radicado_statuses.items():
         if _radicado_validado_por_campos(field_statuses):
             radicados_validados.add(radicado)
         elif _radicado_extemporaneo_por_campos(field_statuses):
             radicados_extemporaneos.add(radicado)
-        else:
-            radicados_pendientes.add(radicado)
 
     summary["radicados_validados"] = len(radicados_validados)
     summary["radicados_validados_extemporaneos"] = len(radicados_extemporaneos)
@@ -748,14 +725,6 @@ def recalcular_cruce_notificaciones(
         summary["radicados_evaluados"]
         - summary["radicados_validados"]
         - summary["radicados_validados_extemporaneos"]
-    )
-    summary["radicados_pendientes_con_correo"] = sum(
-        1
-        for radicado in radicados_pendientes
-        if _radicado_tiene_correo_esperado(rows_by_radicado.get(radicado, []))
-    )
-    summary["radicados_pendientes_solo_texto"] = (
-        summary["radicados_pendientes"] - summary["radicados_pendientes_con_correo"]
     )
     if summary["radicados_evaluados"]:
         summary["porcentaje_radicados_validados"] = round(
