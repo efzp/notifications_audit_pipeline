@@ -790,27 +790,72 @@ def build_coordinate_indexes(coordinates: list[str]) -> dict[str, int]:
     }
 
 
-def iter_sheet_values_by_coordinate(worksheet, start_row: int, coordinates: list[str]):
+def iter_sheet_rows_by_coordinate(worksheet, start_row: int, coordinates: list[str]):
     coordinate_indexes = build_coordinate_indexes(coordinates)
     unique_column_indexes = sorted(set(coordinate_indexes.values()))
     min_column = min(unique_column_indexes)
     max_column = max(unique_column_indexes)
 
-    for row in worksheet.iter_rows(
+    for row_number, row in enumerate(
+        worksheet.iter_rows(
         min_row=start_row,
         max_row=worksheet.max_row,
         min_col=min_column,
         max_col=max_column,
         values_only=True,
+        ),
+        start=start_row,
     ):
         values_by_column = {
             column_index: row[column_index - min_column]
             for column_index in unique_column_indexes
         }
-        yield {
+        yield row_number, {
             coordinate: values_by_column.get(column_index)
             for coordinate, column_index in coordinate_indexes.items()
         }
+
+
+def iter_sheet_values_by_coordinate(worksheet, start_row: int, coordinates: list[str]):
+    for _, values_by_coordinate in iter_sheet_rows_by_coordinate(
+        worksheet,
+        start_row,
+        coordinates,
+    ):
+        yield values_by_coordinate
+
+
+def clean_comment_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def extract_row_comments(worksheet, row_number: int, header_row: int | None = None) -> str | None:
+    comments = []
+
+    for cell in worksheet[row_number]:
+        comment = getattr(cell, "comment", None)
+        if comment is None:
+            continue
+
+        comment_text = clean_comment_text(comment.text)
+        if not comment_text:
+            continue
+
+        header_text = None
+        if header_row:
+            header_value = worksheet.cell(row=header_row, column=cell.column).value
+            header_text = clean_comment_text(header_value) if header_value is not None else None
+
+        author = clean_comment_text(comment.author)
+        parts = [cell.coordinate]
+        if header_text:
+            parts.append(f"({header_text})")
+        if author:
+            parts.append(f"{author}:")
+        parts.append(comment_text)
+        comments.append(" ".join(parts))
+
+    return " | ".join(comments) if comments else None
 
 
 def build_base_case_columns(detail_locations: dict) -> dict[str, str]:
@@ -861,7 +906,11 @@ def extract_base_case_table(workbook, sheets_metadata: list[dict]) -> list[dict]
             continue
 
         coordinates = list(base_columns.values())
-        for values_by_coordinate in iter_sheet_values_by_coordinate(worksheet, detail_row + 1, coordinates):
+        for row_number, values_by_coordinate in iter_sheet_rows_by_coordinate(
+            worksheet,
+            detail_row + 1,
+            coordinates,
+        ):
             numero_radicado = values_by_coordinate.get(key_coordinate)
             if numero_radicado in (None, ""):
                 continue
@@ -871,6 +920,11 @@ def extract_base_case_table(workbook, sheets_metadata: list[dict]) -> list[dict]
             for column_name, coordinate in base_columns.items():
                 output_row[column_name] = serialize_cell_value(values_by_coordinate.get(coordinate))
 
+            output_row["comentarios_excel"] = extract_row_comments(
+                worksheet,
+                row_number,
+                detail_row,
+            )
             rows.append(output_row)
 
     return rows
@@ -995,7 +1049,7 @@ def process_payload_data(payload: dict) -> dict:
     payload = validate_payload(payload)
     content = decode_file(payload)
     entries = validate_xlsx(content)
-    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    workbook = load_workbook(BytesIO(content), read_only=False, data_only=True)
     dated_sheets = extract_dated_sheets(workbook)
     standard_column_dictionary = build_standard_column_dictionary(dated_sheets)
     mensaje_error = [

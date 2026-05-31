@@ -18,6 +18,11 @@ CASO_FIELD_MAP: dict[str, str] = {
     "fecha_pago_dictamen": "fecha_pago_dictamen",
     "valor": "valor_reportado",
     "correo_guia": "correo_guia",
+    "eps": "eps",
+    "afp": "afp",
+    "arl": "arl",
+    "aseguradoras": "asegurado",
+    "comentarios_excel": "comentarios_excel",
 }
 
 
