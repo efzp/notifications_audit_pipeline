@@ -23,6 +23,15 @@ from src.utils.normalization import (
 
 SCRIPT_VERSION = "1.0"
 
+CASO_HASH_EXCLUDED_FIELDS = {
+    "id_archivo",
+    "tabla_caso_json",
+    "hash_caso",
+    "activo",
+    "fecha_creacion",
+    "fecha_actualizacion",
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
@@ -32,6 +41,17 @@ def map_fields(row: dict[str, Any], field_map: dict[str, str]) -> dict[str, Any]
     return {
         target_field: row.get(source_field)
         for source_field, target_field in field_map.items()
+    }
+
+
+def business_hash_payload(
+    row: dict[str, Any],
+    excluded_fields: set[str],
+) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in excluded_fields
     }
 
 
@@ -98,6 +118,7 @@ def prepare_estructura_hoja_rows(id_archivo: int, result: dict[str, Any]) -> lis
 
 def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
+    seen_hashes = set()
 
     for source_row in result.get("tabla_casos") or []:
         mapped_row = map_fields(source_row, CASO_FIELD_MAP)
@@ -118,12 +139,12 @@ def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str,
         mapped_row["activo"] = 1
         mapped_row["fecha_creacion"] = utc_now_iso()
 
-        hash_payload = {
-            key: value
-            for key, value in mapped_row.items()
-            if key not in {"tabla_caso_json", "hash_caso"}
-        }
+        hash_payload = business_hash_payload(mapped_row, CASO_HASH_EXCLUDED_FIELDS)
         mapped_row["hash_caso"] = sha256_dict(hash_payload)
+        if mapped_row["hash_caso"] in seen_hashes:
+            continue
+
+        seen_hashes.add(mapped_row["hash_caso"])
         rows.append(mapped_row)
 
     return rows

@@ -74,19 +74,30 @@ def find_processed_duplicate(
     tipo_archivo: str | None,
     hash_archivo: str | None,
 ) -> dict[str, Any] | None:
-    if not hash_archivo or not tipo_archivo:
+    if not hash_archivo:
         return None
 
-    rows = db.fetch_rows(
-        "jnc.etl_archivo_cargado",
-        ["id_archivo", "nombre_archivo", "estado_proceso", "fecha_fin_proceso"],
-        (
+    where = (
+        "[hash_archivo] = ? "
+        "AND [id_archivo] <> ? "
+        "AND [estado_proceso] IN ('PROCESADO', 'PROCESADO_CON_ALERTAS')"
+    )
+    params: list[Any] = [hash_archivo, id_archivo]
+
+    if tipo_archivo:
+        where = (
             "[hash_archivo] = ? "
             "AND [tipo_archivo] = ? "
             "AND [id_archivo] <> ? "
             "AND [estado_proceso] IN ('PROCESADO', 'PROCESADO_CON_ALERTAS')"
-        ),
-        [hash_archivo, tipo_archivo, id_archivo],
+        )
+        params = [hash_archivo, tipo_archivo, id_archivo]
+
+    rows = db.fetch_rows(
+        "jnc.etl_archivo_cargado",
+        ["id_archivo", "nombre_archivo", "estado_proceso", "fecha_fin_proceso"],
+        where,
+        params,
     )
     if not rows:
         return None

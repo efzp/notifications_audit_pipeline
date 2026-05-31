@@ -333,6 +333,14 @@ ON jnc.caso_calificado (
     hash_caso
 );
 
+CREATE UNIQUE INDEX UX_caso_calificado_archivo_hash
+ON jnc.caso_calificado (
+    id_archivo,
+    hash_caso
+)
+WHERE hash_caso IS NOT NULL
+  AND activo = 1;
+
 CREATE INDEX IX_notificacion_esperada_revision
 ON jnc.notificacion_esperada (
     activo,
