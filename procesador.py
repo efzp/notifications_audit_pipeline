@@ -145,6 +145,7 @@ EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD = 0.88
 ROW_METADATA_FIELDS = {
     "pestana_nombre": "pestana_nombre",
     "pestana_sala_normalizada": "pestana_sala_normalizada",
+    "hoja_trabajo_sala": "hoja_trabajo_sala",
     "hoja_trabajo_sala_normalizada": "hoja_trabajo_sala_normalizada",
 }
 

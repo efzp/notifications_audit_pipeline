@@ -434,6 +434,43 @@ def delete_by_archivo(table_name: str, id_archivo: int) -> int:
     return _execute_with_optional_own_connection(operation)
 
 
+def delete_all(table_name: str) -> int:
+    quoted_table = quote_table_name(table_name)
+    sql = f"DELETE FROM {quoted_table}"
+
+    def operation(connection):
+        cursor = connection.cursor()
+        cursor.execute(sql)
+        return cursor.rowcount if cursor.rowcount is not None else 0
+
+    return _execute_with_optional_own_connection(operation)
+
+
+def delete_by_column_values(table_name: str, column_name: str, values: list[Any]) -> int:
+    clean_values = [value for value in values if value is not None]
+    if not clean_values:
+        return 0
+
+    quoted_table = quote_table_name(table_name)
+    quoted_column = quote_column_name(column_name)
+    chunks = [
+        clean_values[index : index + 900]
+        for index in range(0, len(clean_values), 900)
+    ]
+
+    def operation(connection):
+        cursor = connection.cursor()
+        deleted = 0
+        for chunk in chunks:
+            placeholders = ", ".join("?" for _ in chunk)
+            sql = f"DELETE FROM {quoted_table} WHERE {quoted_column} IN ({placeholders})"
+            cursor.execute(sql, chunk)
+            deleted += cursor.rowcount if cursor.rowcount is not None else 0
+        return deleted
+
+    return _execute_with_optional_own_connection(operation)
+
+
 def fetch_rows(
     table_name: str,
     columns: list[str],

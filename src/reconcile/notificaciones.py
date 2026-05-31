@@ -27,6 +27,7 @@ PLAZO_DIAS_CALENDARIO = 2
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
+CRUCE_VERSION = "1.0"
 
 
 def utc_now_iso() -> str:
@@ -537,9 +538,14 @@ def _best_candidate(
     return scored_candidates[0], True
 
 
-def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | None, has_document_candidates: bool) -> dict[str, Any]:
+def _build_revision_rows(
+    expected_row: dict[str, Any],
+    candidate: dict[str, Any] | None,
+    has_document_candidates: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     status, pending_detail = _status_from_candidate(candidate, has_document_candidates)
     correo_row = candidate.get("correo_row") if candidate else None
+    revision_date = utc_now_iso()
 
     detail = {
         "estado_revision_notificacion": status,
@@ -578,18 +584,64 @@ def _build_update_row(expected_row: dict[str, Any], candidate: dict[str, Any] | 
         "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
         "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
     }
+    detail_json = json_dumps_safe(detail)
 
-    return {
+    update_row = {
         "id_notificacion_esperada": expected_row["id_notificacion_esperada"],
         "estado_revision_notificacion": status,
         "pendiente_revision": pending_detail,
         "id_notificacion_correo_certificado_match": correo_row.get("id_notificacion_correo")
         if correo_row
         else None,
-        "fecha_revision_notificacion": utc_now_iso(),
-        "detalle_revision_json": json_dumps_safe(detail),
-        "fecha_actualizacion": utc_now_iso(),
+        "fecha_revision_notificacion": revision_date,
+        "detalle_revision_json": detail_json,
+        "fecha_actualizacion": revision_date,
     }
+    cruce_row = {
+        "id_notificacion_esperada": expected_row["id_notificacion_esperada"],
+        "id_caso": expected_row.get("id_caso"),
+        "id_archivo": expected_row.get("id_archivo"),
+        "numero_radicado": expected_row.get("numero_radicado"),
+        "numero_radicado_normalizado": expected_row.get("numero_radicado_normalizado"),
+        "cedula": expected_row.get("cedula"),
+        "cedula_normalizada": expected_row.get("cedula_normalizada"),
+        "tipo_destinatario": expected_row.get("tipo_destinatario"),
+        "id_notificacion_correo_certificado_match": correo_row.get("id_notificacion_correo")
+        if correo_row
+        else None,
+        "id_archivo_correo_certificado_match": correo_row.get("id_archivo")
+        if correo_row
+        else None,
+        "numero_linea_csv_match": correo_row.get("numero_linea_csv") if correo_row else None,
+        "estado_revision_notificacion": status,
+        "descripcion_revision": pending_detail,
+        "cumple_documento": 1 if candidate and candidate.get("cumple_documento") else 0,
+        "cumple_asunto": 1 if candidate and candidate.get("cumple_asunto") else 0,
+        "cumple_evento": 1 if candidate and candidate.get("cumple_evento") else 0,
+        "cumple_correo": 1 if candidate and candidate.get("cumple_correo") else 0,
+        "cumple_plazo": 1 if candidate and candidate.get("cumple_plazo") else 0,
+        "score_total": candidate.get("score_total") if candidate else None,
+        "score_asunto": candidate.get("score_asunto") if candidate else None,
+        "score_evento": candidate.get("score_evento") if candidate else None,
+        "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
+        "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
+        "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
+        "tipo_match_correo": candidate.get("tipo_match_correo") if candidate else None,
+        "distancia_correo": candidate.get("distancia_correo") if candidate else None,
+        "correo_esperado": candidate.get("correo_esperado") if candidate else None,
+        "correo_certificado": candidate.get("correo_certificado") if candidate else None,
+        "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
+        "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
+        "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
+        "fecha_revision": revision_date,
+        "version_regla_cruce": CRUCE_VERSION,
+        "detalle_revision_json": detail_json,
+        "activo": 1,
+        "fecha_creacion": revision_date,
+        "fecha_actualizacion": revision_date,
+    }
+
+    return update_row, cruce_row
 
 
 def _radicado_key(row: dict[str, Any]) -> str | None:
@@ -666,6 +718,7 @@ def recalcular_cruce_notificaciones(
     correo_index = _build_correo_index(correo_rows)
 
     updates = []
+    cruce_rows = []
     status_by_expected_id = {
         row.get("id_notificacion_esperada"): (
             row.get("estado_revision_notificacion") or "SIN_REVISION"
@@ -678,6 +731,8 @@ def recalcular_cruce_notificaciones(
         "cumplen": 0,
         "pendientes": 0,
         "sin_correo_certificado": 0,
+        "cruces_eliminados": 0,
+        "cruces_insertados": 0,
         "porcentaje_notificaciones_validadas": 0.0,
         "radicados_evaluados": 0,
         "radicados_validados": 0,
@@ -689,8 +744,13 @@ def recalcular_cruce_notificaciones(
 
     for expected_row in expected_rows:
         candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
-        update_row = _build_update_row(expected_row, candidate, has_document_candidates)
+        update_row, cruce_row = _build_revision_rows(
+            expected_row,
+            candidate,
+            has_document_candidates,
+        )
         updates.append(update_row)
+        cruce_rows.append(cruce_row)
 
         status = update_row["estado_revision_notificacion"]
         status_by_expected_id[expected_row.get("id_notificacion_esperada")] = status
@@ -738,6 +798,28 @@ def recalcular_cruce_notificaciones(
             )
             * 100,
             2,
+        )
+
+    if cruce_rows:
+        if not solo_pendientes and id_archivo_salas is not None:
+            summary["cruces_eliminados"] = db.delete_by_archivo(
+                "jnc.resultado_cruce_notificacion",
+                id_archivo_salas,
+            )
+        elif not solo_pendientes:
+            summary["cruces_eliminados"] = db.delete_all(
+                "jnc.resultado_cruce_notificacion",
+            )
+        else:
+            summary["cruces_eliminados"] = db.delete_by_column_values(
+                "jnc.resultado_cruce_notificacion",
+                "id_notificacion_esperada",
+                [row.get("id_notificacion_esperada") for row in cruce_rows],
+            )
+
+        summary["cruces_insertados"] = db.insert_many(
+            "jnc.resultado_cruce_notificacion",
+            cruce_rows,
         )
 
     summary["notificaciones_actualizadas"] = db.execute_many_updates(

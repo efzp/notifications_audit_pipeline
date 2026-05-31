@@ -41,6 +41,23 @@ BEGIN
     ADD comentarios_excel NVARCHAR(MAX) NULL;
 END;
 
+IF OBJECT_ID('jnc.resultado_cruce_notificacion', 'U') IS NOT NULL
+   AND COL_LENGTH('jnc.resultado_cruce_notificacion', 'id_archivo') IS NULL
+   AND COL_LENGTH('jnc.resultado_cruce_notificacion', 'id_archivo_salas') IS NOT NULL
+BEGIN
+    EXEC sp_rename
+        'jnc.resultado_cruce_notificacion.id_archivo_salas',
+        'id_archivo',
+        'COLUMN';
+END;
+
+IF OBJECT_ID('jnc.resultado_cruce_notificacion', 'U') IS NOT NULL
+   AND COL_LENGTH('jnc.resultado_cruce_notificacion', 'id_archivo') IS NULL
+BEGIN
+    ALTER TABLE jnc.resultado_cruce_notificacion
+    ADD id_archivo INT NULL;
+END;
+
 DECLARE @columnas_eliminar TABLE (
     schema_name SYSNAME NOT NULL,
     table_name SYSNAME NOT NULL,
@@ -49,6 +66,10 @@ DECLARE @columnas_eliminar TABLE (
 
 INSERT INTO @columnas_eliminar (schema_name, table_name, column_name)
 VALUES
+    ('jnc', 'etl_archivo_cargado', 'fecha_inicio_proceso'),
+    ('jnc', 'etl_archivo_cargado', 'periodo_detectado'),
+    ('jnc', 'etl_archivo_cargado', 'rango_desde'),
+    ('jnc', 'etl_archivo_cargado', 'rango_hasta'),
     ('jnc', 'caso_calificado', 'periodo_reporte'),
     ('jnc', 'caso_calificado', 'fecha_corte_archivo'),
     ('jnc', 'caso_calificado', 'hoja_origen'),
