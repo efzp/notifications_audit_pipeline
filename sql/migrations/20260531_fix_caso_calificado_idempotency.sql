@@ -21,4 +21,3 @@ BEGIN
     WHERE hash_caso IS NOT NULL
       AND activo = 1;
 END;
-
