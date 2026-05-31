@@ -1,7 +1,7 @@
 import json
 import re
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -28,6 +28,7 @@ FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
 CRUCE_VERSION = "1.0"
+CORREO_FECHA_VENTANA_DIAS = 7
 
 
 def utc_now_iso() -> str:
@@ -237,7 +238,29 @@ def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
     return db.fetch_rows("jnc.notificacion_esperada", columns, where, params)
 
 
-def _fetch_correo_rows() -> list[dict[str, Any]]:
+def _expected_reference_date(row: dict[str, Any]) -> date | None:
+    return _parse_date(
+        row.get("hoja_trabajo_fecha_audiencia")
+        or row.get("fecha_envio_reportada")
+    )
+
+
+def _correo_date_window(expected_rows: list[dict[str, Any]]) -> tuple[date, date] | None:
+    dates = [
+        reference_date
+        for row in expected_rows
+        if (reference_date := _expected_reference_date(row)) is not None
+    ]
+    if not dates:
+        return None
+
+    return (
+        min(dates) - timedelta(days=CORREO_FECHA_VENTANA_DIAS),
+        max(dates) + timedelta(days=CORREO_FECHA_VENTANA_DIAS),
+    )
+
+
+def _fetch_correo_rows(date_window: tuple[date, date] | None = None) -> list[dict[str, Any]]:
     columns = [
         "id_notificacion_correo",
         "id_archivo",
@@ -256,7 +279,28 @@ def _fetch_correo_rows() -> list[dict[str, Any]]:
     ]
     table_columns = db.get_table_columns("jnc.notificacion_correo_certificado")
     existing_columns = [column for column in columns if column in table_columns]
-    return db.fetch_rows("jnc.notificacion_correo_certificado", existing_columns, "1 = 1", [])
+    where = "1 = 1"
+    params: list[Any] = []
+
+    if date_window:
+        date_columns = [
+            column_name
+            for column_name in ("fecha", "fecha_2", "fecha_3")
+            if column_name in table_columns
+        ]
+        if date_columns:
+            start_date, end_date = date_window
+            where = " OR ".join(
+                f"([{column_name}] BETWEEN ? AND ?)"
+                for column_name in date_columns
+            )
+            params = [
+                value
+                for _ in date_columns
+                for value in (start_date, end_date)
+            ]
+
+    return db.fetch_rows("jnc.notificacion_correo_certificado", existing_columns, where, params)
 
 
 def _build_correo_index(correo_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -714,7 +758,8 @@ def recalcular_cruce_notificaciones(
             if row.get("estado_revision_notificacion") != ESTADO_CUMPLE
         ]
 
-    correo_rows = _fetch_correo_rows()
+    date_window = _correo_date_window(expected_rows)
+    correo_rows = _fetch_correo_rows(date_window)
     correo_index = _build_correo_index(correo_rows)
 
     updates = []
@@ -728,6 +773,9 @@ def recalcular_cruce_notificaciones(
     summary = {
         "notificaciones_evaluadas": len(expected_rows),
         "notificaciones_actualizadas": 0,
+        "correos_evaluados": len(correo_rows),
+        "ventana_correo_desde": date_window[0].isoformat() if date_window else None,
+        "ventana_correo_hasta": date_window[1].isoformat() if date_window else None,
         "cumplen": 0,
         "pendientes": 0,
         "sin_correo_certificado": 0,
