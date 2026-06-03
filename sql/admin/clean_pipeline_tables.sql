@@ -16,6 +16,11 @@ BEGIN
     DELETE FROM jnc.resultado_cruce_notificacion;
 END;
 
+IF OBJECT_ID('jnc.resumen_validacion_radicado', 'U') IS NOT NULL
+BEGIN
+    DELETE FROM jnc.resumen_validacion_radicado;
+END;
+
 DELETE FROM jnc.notificacion_esperada;
 DELETE FROM jnc.notificacion_correo_certificado;
 DELETE FROM jnc.caso_calificado;
@@ -27,6 +32,11 @@ DELETE FROM jnc.etl_archivo_cargado;
 IF OBJECT_ID('jnc.resultado_cruce_notificacion', 'U') IS NOT NULL
 BEGIN
     DBCC CHECKIDENT ('jnc.resultado_cruce_notificacion', RESEED, 0);
+END;
+
+IF OBJECT_ID('jnc.resumen_validacion_radicado', 'U') IS NOT NULL
+BEGIN
+    DBCC CHECKIDENT ('jnc.resumen_validacion_radicado', RESEED, 0);
 END;
 
 DBCC CHECKIDENT ('jnc.notificacion_esperada', RESEED, 0);

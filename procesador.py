@@ -124,20 +124,14 @@ EXCLUDED_NOTIFICATION_EMAIL_VALUES = {
     "no_reporta",
     "no_reportan",
     "independiente",
-    "no_cuenta",
-    "no_refiere",
     "sin_correo",
     "sin_email",
 }
 EXCLUDED_NOTIFICATION_EMAIL_FUZZY_VALUES = {
     "independiente",
-    "no_cuenta",
-    "no_refiere",
 }
 EXCLUDED_NOTIFICATION_EMAIL_FUZZY_PHRASES = {
     "independiente",
-    "no_cuenta",
-    "no_refiere",
     "no_informa",
 }
 EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD = 0.88
@@ -722,9 +716,6 @@ def should_skip_notification_email(value: object) -> bool:
         return True
 
     if "@" not in raw_value and should_skip_by_fuzzy_phrase(normalized_value):
-        return True
-
-    if "@" not in raw_value and re.fullmatch(r"[\d\s.,/\-]+", raw_value):
         return True
 
     return False

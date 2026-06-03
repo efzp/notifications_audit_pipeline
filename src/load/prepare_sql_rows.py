@@ -126,6 +126,7 @@ def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str,
         mapped_row["numero_radicado_normalizado"] = normalize_radicado(
             mapped_row.get("numero_radicado")
         )
+        mapped_row["cedula_normalizada"] = normalize_document(mapped_row.get("cedula"))
         mapped_row["nombre_paciente_normalizado"] = normalize_db_string(
             mapped_row.get("nombre_paciente")
         )

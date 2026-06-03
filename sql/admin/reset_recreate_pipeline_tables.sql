@@ -35,6 +35,7 @@ SELECT @drop_fk_sql = STRING_AGG(
 )
 FROM sys.foreign_keys AS fk
 WHERE fk.referenced_object_id IN (
+    OBJECT_ID('jnc.resumen_validacion_radicado'),
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
@@ -45,6 +46,7 @@ WHERE fk.referenced_object_id IN (
     OBJECT_ID('jnc.etl_archivo_cargado')
 )
 OR fk.parent_object_id IN (
+    OBJECT_ID('jnc.resumen_validacion_radicado'),
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
@@ -60,6 +62,7 @@ BEGIN
     EXEC sp_executesql @drop_fk_sql;
 END;
 
+DROP TABLE IF EXISTS jnc.resumen_validacion_radicado;
 DROP TABLE IF EXISTS jnc.resultado_cruce_notificacion;
 DROP TABLE IF EXISTS jnc.notificacion_esperada;
 DROP TABLE IF EXISTS jnc.notificacion_correo_certificado;
@@ -146,6 +149,8 @@ CREATE TABLE jnc.caso_calificado (
     hoja_trabajo_fecha_audiencia DATE NULL,
     numero_radicado NVARCHAR(100) NULL,
     numero_radicado_normalizado NVARCHAR(100) NULL,
+    cedula NVARCHAR(50) NULL,
+    cedula_normalizada NVARCHAR(50) NULL,
     nombre_paciente NVARCHAR(500) NULL,
     nombre_paciente_normalizado NVARCHAR(500) NULL,
     entidad_remitente NVARCHAR(500) NULL,
@@ -314,6 +319,39 @@ CREATE TABLE jnc.resultado_cruce_notificacion (
     fecha_actualizacion DATETIME2(0) NULL
 );
 
+CREATE TABLE jnc.resumen_validacion_radicado (
+    id_resumen_validacion BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_resumen_validacion_radicado PRIMARY KEY,
+    numero_radicado NVARCHAR(100) NULL,
+    numero_radicado_normalizado NVARCHAR(100) NULL,
+    nombre_pestana NVARCHAR(255) NULL,
+    sala NVARCHAR(255) NULL,
+    fecha_audiencia DATE NULL,
+    cedula NVARCHAR(50) NULL,
+    nombre_paciente NVARCHAR(500) NULL,
+    condicion_pacientes BIT NOT NULL,
+    condicion_pacientes_extemporaneo BIT NOT NULL,
+    condicion_regional BIT NOT NULL,
+    condicion_regional_extemporaneo BIT NOT NULL,
+    condicion_empleador BIT NOT NULL,
+    condicion_empleador_extemporaneo BIT NOT NULL,
+    condicion_remitente BIT NOT NULL,
+    condicion_remitente_extemporaneo BIT NOT NULL,
+    condicion_eps BIT NOT NULL,
+    condicion_eps_extemporaneo BIT NOT NULL,
+    condicion_afp BIT NOT NULL,
+    condicion_afp_extemporaneo BIT NOT NULL,
+    condicion_arl BIT NOT NULL,
+    condicion_arl_extemporaneo BIT NOT NULL,
+    condicion_aseguradoras BIT NOT NULL,
+    condicion_aseguradoras_extemporaneo BIT NOT NULL,
+    cumplimiento_total BIT NOT NULL,
+    cumplimiento_extemporaneo BIT NOT NULL,
+    no_cumplimiento_revision_manual NVARCHAR(500) NULL,
+    fecha_actualizacion_resumen DATETIME2(0) NOT NULL
+        CONSTRAINT DF_resumen_validacion_fecha_actualizacion DEFAULT (SYSUTCDATETIME())
+);
+
 CREATE INDEX IX_etl_archivo_cargado_hash_tipo_estado
 ON jnc.etl_archivo_cargado (
     hash_archivo,
@@ -397,5 +435,18 @@ ON jnc.resultado_cruce_notificacion (
     id_notificacion_esperada
 )
 WHERE activo = 1;
+
+CREATE UNIQUE INDEX UX_resumen_validacion_radicado
+ON jnc.resumen_validacion_radicado (
+    numero_radicado_normalizado
+)
+WHERE numero_radicado_normalizado IS NOT NULL;
+
+CREATE INDEX IX_resumen_validacion_estado
+ON jnc.resumen_validacion_radicado (
+    cumplimiento_total,
+    cumplimiento_extemporaneo,
+    fecha_audiencia
+);
 
 COMMIT TRANSACTION;

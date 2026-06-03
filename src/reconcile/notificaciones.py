@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from src.load import db
+from src.reconcile.resumen_validacion import refrescar_resumen_validacion_radicado
 from src.utils.normalization import (
     json_dumps_safe,
     normalize_date,
@@ -788,6 +789,7 @@ def recalcular_cruce_notificaciones(
         "radicados_pendientes": 0,
         "porcentaje_radicados_validados": 0.0,
         "porcentaje_radicados_validados_extemporaneos": 0.0,
+        "resumen_validacion_radicado": {},
     }
 
     for expected_row in expected_rows:
@@ -875,4 +877,5 @@ def recalcular_cruce_notificaciones(
         "id_notificacion_esperada",
         updates,
     )
+    summary["resumen_validacion_radicado"] = refrescar_resumen_validacion_radicado()
     return summary

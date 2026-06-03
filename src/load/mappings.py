@@ -6,6 +6,7 @@ CASO_FIELD_MAP: dict[str, str] = {
     "hoja_trabajo_sala_normalizada": "hoja_trabajo_sala_normalizada",
     "hoja_trabajo_fecha_audiencia": "hoja_trabajo_fecha_audiencia",
     "numero_radicado": "numero_radicado",
+    "cedula": "cedula",
     "nombre_del_paciente": "nombre_paciente",
     "entidad_remitente": "entidad_remitente",
     "regional": "regional",

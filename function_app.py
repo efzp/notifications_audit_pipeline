@@ -10,6 +10,7 @@ import azure.functions as func
 
 import procesador
 import procesador_correo
+import procesador_guias
 from src.load import db
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_salas import write_salas_result_to_sql
@@ -207,6 +208,29 @@ def handle_sql_processing(
         )
 
 
+def handle_read_processing(
+    req: func.HttpRequest,
+    route_name: str,
+    processor,
+) -> func.HttpResponse:
+    logging.info("%s ejecutada", route_name)
+
+    try:
+        payload = get_request_payload(req)
+        result = processor(payload)
+        return build_json_response(result, status_code=200)
+    except Exception as exc:
+        logging.exception("Error procesando %s", route_name)
+        return build_json_response(
+            {
+                "status": "ERROR_PROCESAMIENTO",
+                "errores": 1,
+                "mensaje": str(exc),
+            },
+            status_code=500,
+        )
+
+
 @app.route(route="procesar_input_salas", methods=["POST"])
 def procesar_input_salas(req: func.HttpRequest) -> func.HttpResponse:
     return handle_sql_processing(
@@ -224,4 +248,13 @@ def procesar_correo_certificado(req: func.HttpRequest) -> func.HttpResponse:
         "procesar_correo_certificado",
         procesador_correo.process_payload_data,
         write_correo_result_to_sql,
+    )
+
+
+@app.route(route="procesar_guias_correo_fisico", methods=["POST"])
+def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_read_processing(
+        req,
+        "procesar_guias_correo_fisico",
+        procesador_guias.process_payload_data,
     )

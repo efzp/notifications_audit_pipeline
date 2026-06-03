@@ -15,6 +15,7 @@ ALLOWED_TABLES = {
     "jnc.etl_error_procesamiento",
     "jnc.etl_ejecucion_regla",
     "jnc.resultado_cruce_notificacion",
+    "jnc.resumen_validacion_radicado",
 }
 
 _COLUMN_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -125,6 +126,29 @@ def _execute_with_optional_own_connection(operation: Callable[[Any], Any]) -> An
     finally:
         if owns_connection:
             connection.close()
+
+
+def execute_sql(sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> int:
+    params = params or []
+
+    def operation(connection):
+        cursor = connection.cursor()
+        cursor.execute(sql, params)
+        return cursor.rowcount if cursor.rowcount is not None else 0
+
+    return _execute_with_optional_own_connection(operation)
+
+
+def fetch_scalar_sql(sql: str, params: list[Any] | tuple[Any, ...] | None = None) -> Any:
+    params = params or []
+
+    def operation(connection):
+        cursor = connection.cursor()
+        cursor.execute(sql, params)
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    return _execute_with_optional_own_connection(operation)
 
 
 def get_table_columns(table_name: str) -> set[str]:
