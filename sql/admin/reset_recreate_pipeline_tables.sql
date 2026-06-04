@@ -39,6 +39,8 @@ WHERE fk.referenced_object_id IN (
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
+    OBJECT_ID('jnc.audiencia_caso'),
+    OBJECT_ID('jnc.etl_estructura_acta'),
     OBJECT_ID('jnc.caso_calificado'),
     OBJECT_ID('jnc.etl_estructura_hoja'),
     OBJECT_ID('jnc.etl_error_procesamiento'),
@@ -50,6 +52,8 @@ OR fk.parent_object_id IN (
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
+    OBJECT_ID('jnc.audiencia_caso'),
+    OBJECT_ID('jnc.etl_estructura_acta'),
     OBJECT_ID('jnc.caso_calificado'),
     OBJECT_ID('jnc.etl_estructura_hoja'),
     OBJECT_ID('jnc.etl_error_procesamiento'),
@@ -66,6 +70,8 @@ DROP TABLE IF EXISTS jnc.resumen_validacion_radicado;
 DROP TABLE IF EXISTS jnc.resultado_cruce_notificacion;
 DROP TABLE IF EXISTS jnc.notificacion_esperada;
 DROP TABLE IF EXISTS jnc.notificacion_correo_certificado;
+DROP TABLE IF EXISTS jnc.audiencia_caso;
+DROP TABLE IF EXISTS jnc.etl_estructura_acta;
 DROP TABLE IF EXISTS jnc.caso_calificado;
 DROP TABLE IF EXISTS jnc.etl_estructura_hoja;
 DROP TABLE IF EXISTS jnc.etl_error_procesamiento;
@@ -103,7 +109,8 @@ CREATE TABLE jnc.etl_archivo_cargado (
     delimitador_csv NVARCHAR(10) NULL,
     encabezados_originales_json NVARCHAR(MAX) NULL,
     encabezados_normalizados_json NVARCHAR(MAX) NULL,
-    total_filas_correo_certificado INT NULL
+    total_filas_correo_certificado INT NULL,
+    total_actas_audiencia_pdf INT NULL
 );
 
 CREATE TABLE jnc.etl_estructura_hoja (
@@ -204,6 +211,73 @@ CREATE TABLE jnc.notificacion_correo_certificado (
     hash_correo NVARCHAR(64) NULL,
     fecha_creacion DATETIME2(0) NOT NULL
         CONSTRAINT DF_notificacion_correo_fecha_creacion DEFAULT (SYSUTCDATETIME())
+);
+
+CREATE TABLE jnc.etl_estructura_acta (
+    id_estructura_acta BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_etl_estructura_acta PRIMARY KEY,
+    id_archivo INT NOT NULL,
+    numero_acta NVARCHAR(100) NULL,
+    numero_acta_normalizado NVARCHAR(100) NULL,
+    fecha_audiencia DATE NULL,
+    sala NVARCHAR(255) NULL,
+    sala_normalizada NVARCHAR(255) NULL,
+    numero_paginas INT NULL,
+    cantidad_casos INT NULL,
+    medicos_firmantes_json NVARCHAR(MAX) NULL,
+    terapeuta_o_psicologo NVARCHAR(500) NULL,
+    proyectado_por NVARCHAR(500) NULL,
+    documento_cuenta_con_firmas BIT NULL,
+    estado_validacion_firmas NVARCHAR(100) NULL,
+    firmantes_validados_json NVARCHAR(MAX) NULL,
+    criterio_validacion_firmas NVARCHAR(MAX) NULL,
+    asistentes_detectados_json NVARCHAR(MAX) NULL,
+    casos_detectados_json NVARCHAR(MAX) NULL,
+    radicados_detectados_json NVARCHAR(MAX) NULL,
+    cedulas_detectadas_json NVARCHAR(MAX) NULL,
+    texto_completo NVARCHAR(MAX) NULL,
+    texto_paginas_json NVARCHAR(MAX) NULL,
+    metadata_pdf_json NVARCHAR(MAX) NULL,
+    tabla_acta_json NVARCHAR(MAX) NULL,
+    hash_estructura_acta NVARCHAR(64) NULL,
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_etl_estructura_acta_fecha_creacion DEFAULT (SYSUTCDATETIME())
+);
+
+CREATE TABLE jnc.audiencia_caso (
+    id_audiencia_caso BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_audiencia_caso PRIMARY KEY,
+    id_estructura_acta BIGINT NULL,
+    id_archivo INT NOT NULL,
+    numero_acta NVARCHAR(100) NULL,
+    numero_acta_normalizado NVARCHAR(100) NULL,
+    fecha_audiencia DATE NULL,
+    sala NVARCHAR(255) NULL,
+    sala_normalizada NVARCHAR(255) NULL,
+    numero_orden INT NULL,
+    numero_radicado NVARCHAR(100) NULL,
+    numero_radicado_normalizado NVARCHAR(100) NULL,
+    nombre_paciente NVARCHAR(500) NULL,
+    nombre_paciente_normalizado NVARCHAR(500) NULL,
+    tipo_identificacion NVARCHAR(50) NULL,
+    numero_identificacion NVARCHAR(50) NULL,
+    numero_identificacion_normalizado NVARCHAR(50) NULL,
+    entidad_remitente NVARCHAR(500) NULL,
+    entidad_remitente_normalizado NVARCHAR(500) NULL,
+    medico_ponente NVARCHAR(500) NULL,
+    medico_ponente_normalizado NVARCHAR(500) NULL,
+    medico_principal NVARCHAR(500) NULL,
+    medico_principal_normalizado NVARCHAR(500) NULL,
+    terapeuta_psicologa NVARCHAR(500) NULL,
+    terapeuta_psicologa_normalizado NVARCHAR(500) NULL,
+    fila_texto NVARCHAR(MAX) NULL,
+    fila_caso_json NVARCHAR(MAX) NULL,
+    hash_audiencia_caso NVARCHAR(64) NULL,
+    activo BIT NOT NULL
+        CONSTRAINT DF_audiencia_caso_activo DEFAULT (1),
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_audiencia_caso_fecha_creacion DEFAULT (SYSUTCDATETIME()),
+    fecha_actualizacion DATETIME2(0) NULL
 );
 
 CREATE TABLE jnc.notificacion_esperada (
@@ -403,6 +477,27 @@ INCLUDE (
     id_notificacion_correo,
     numero_linea_csv,
     estado_correo
+);
+
+CREATE INDEX IX_etl_estructura_acta_archivo
+ON jnc.etl_estructura_acta (
+    id_archivo,
+    fecha_audiencia,
+    sala_normalizada
+);
+
+CREATE UNIQUE INDEX UX_etl_estructura_acta_archivo_hash
+ON jnc.etl_estructura_acta (
+    id_archivo,
+    hash_estructura_acta
+)
+WHERE hash_estructura_acta IS NOT NULL;
+
+CREATE INDEX IX_audiencia_caso_archivo
+ON jnc.audiencia_caso (
+    id_archivo,
+    numero_radicado_normalizado,
+    numero_identificacion_normalizado
 );
 
 CREATE INDEX IX_resultado_cruce_notificacion_radicado

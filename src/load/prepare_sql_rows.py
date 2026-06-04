@@ -2,9 +2,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.load.mappings import (
+    AUDIENCIA_CASO_FIELD_MAP,
     CASO_FIELD_MAP,
     CORREO_CERTIFICADO_FIELD_MAP,
     CORREO_CERTIFICADO_JSON_FIELDS,
+    ESTRUCTURA_ACTA_FIELD_MAP,
+    ESTRUCTURA_ACTA_JSON_FIELDS,
     ESTRUCTURA_HOJA_FIELD_MAP,
     ESTRUCTURA_HOJA_JSON_FIELDS,
     NOTIFICACION_FIELD_MAP,
@@ -30,6 +33,23 @@ CASO_HASH_EXCLUDED_FIELDS = {
     "activo",
     "fecha_creacion",
     "fecha_actualizacion",
+}
+
+ESTRUCTURA_ACTA_HASH_EXCLUDED_FIELDS = {
+    "id_archivo",
+    "tabla_acta_json",
+    "hash_estructura_acta",
+    "fecha_creacion",
+}
+
+AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS = {
+    "id_archivo",
+    "id_estructura_acta",
+    "fila_caso_json",
+    "hash_audiencia_caso",
+    "fecha_creacion",
+    "fecha_actualizacion",
+    "activo",
 }
 
 
@@ -93,6 +113,27 @@ def prepare_archivo_update_from_correo_result(id_archivo: int, result: dict[str,
         "encabezados_normalizados_json": json_dumps_safe(result.get("encabezados_normalizados")),
         "total_filas_correo_certificado": total_rows,
         "notificaciones_detectadas": total_rows,
+        "estado_proceso": "PROCESADO"
+        if result.get("status") == "OK"
+        else "ERROR_PROCESAMIENTO",
+        "fecha_fin_proceso": utc_now_iso(),
+    }
+
+
+def prepare_archivo_update_from_audiencias_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    total_actas = result.get("total_actas_audiencia_pdf") or len(
+        result.get("tabla_estructura_acta") or result.get("tabla_actas_audiencia_pdf") or []
+    )
+    total_casos = result.get("total_casos_acta") or len(
+        result.get("tabla_audiencia_caso") or result.get("tabla_acta_audiencia_casos") or []
+    )
+
+    return {
+        "id_archivo": id_archivo,
+        "procesador_status": result.get("status"),
+        "tamano_bytes": result.get("tamano_bytes"),
+        "total_actas_audiencia_pdf": total_actas,
+        "casos_detectados": total_casos,
         "estado_proceso": "PROCESADO"
         if result.get("status") == "OK"
         else "ERROR_PROCESAMIENTO",
@@ -243,6 +284,111 @@ def prepare_correo_certificado_rows(
     return rows
 
 
+def prepare_estructura_acta_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+
+    for source_row in (
+        result.get("tabla_estructura_acta") or result.get("tabla_actas_audiencia_pdf") or []
+    ):
+        mapped_row = map_fields(source_row, ESTRUCTURA_ACTA_FIELD_MAP)
+
+        for field_name in ESTRUCTURA_ACTA_JSON_FIELDS:
+            mapped_row[field_name] = json_dumps_safe(mapped_row.get(field_name))
+
+        mapped_row["id_archivo"] = id_archivo
+        mapped_row["fecha_audiencia"] = normalize_date(mapped_row.get("fecha_audiencia"))
+        mapped_row["tabla_acta_json"] = json_dumps_safe(source_row)
+        mapped_row["fecha_creacion"] = utc_now_iso()
+
+        hash_payload = business_hash_payload(
+            mapped_row,
+            ESTRUCTURA_ACTA_HASH_EXCLUDED_FIELDS,
+        )
+        mapped_row["hash_estructura_acta"] = sha256_dict(hash_payload)
+        rows.append(mapped_row)
+
+    return rows
+
+
+def prepare_audiencia_caso_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+    estructura_id_by_key: dict[tuple[Any, ...], int] | None = None,
+) -> list[dict[str, Any]]:
+    estructura_rows = (
+        result.get("tabla_estructura_acta") or result.get("tabla_actas_audiencia_pdf") or []
+    )
+    case_rows = result.get("tabla_audiencia_caso") or []
+    if not case_rows and estructura_rows:
+        from procesador_audiencias import build_audiencia_case_rows
+
+        case_rows = build_audiencia_case_rows(estructura_rows[0])
+
+    parent = estructura_rows[0] if estructura_rows else {}
+    rows = []
+
+    for source_row in case_rows:
+        mapped_row = map_fields(source_row, AUDIENCIA_CASO_FIELD_MAP)
+        mapped_row["id_archivo"] = id_archivo
+        mapped_row["numero_acta"] = mapped_row.get("numero_acta") or parent.get("numero_acta")
+        mapped_row["numero_acta_normalizado"] = (
+            mapped_row.get("numero_acta_normalizado")
+            or parent.get("numero_acta_normalizado")
+        )
+        mapped_row["fecha_audiencia"] = normalize_date(
+            mapped_row.get("fecha_audiencia") or parent.get("fecha_audiencia")
+        )
+        mapped_row["sala"] = mapped_row.get("sala") or parent.get("sala")
+        mapped_row["sala_normalizada"] = mapped_row.get("sala_normalizada") or parent.get(
+            "sala_normalizada"
+        )
+        mapped_row["numero_radicado_normalizado"] = normalize_radicado(
+            mapped_row.get("numero_radicado")
+        )
+        mapped_row["nombre_paciente_normalizado"] = normalize_db_string(
+            mapped_row.get("nombre_paciente")
+        )
+        mapped_row["numero_identificacion_normalizado"] = normalize_document(
+            mapped_row.get("numero_identificacion")
+        )
+        mapped_row["entidad_remitente_normalizado"] = normalize_db_string(
+            mapped_row.get("entidad_remitente")
+        )
+        mapped_row["medico_ponente_normalizado"] = normalize_db_string(
+            mapped_row.get("medico_ponente")
+        )
+        mapped_row["medico_principal_normalizado"] = normalize_db_string(
+            mapped_row.get("medico_principal")
+        )
+        mapped_row["terapeuta_psicologa_normalizado"] = normalize_db_string(
+            mapped_row.get("terapeuta_psicologa")
+        )
+        mapped_row["fila_caso_json"] = json_dumps_safe(source_row)
+        mapped_row["activo"] = 1
+        mapped_row["fecha_creacion"] = utc_now_iso()
+
+        if estructura_id_by_key:
+            key = (
+                mapped_row.get("id_archivo"),
+                mapped_row.get("numero_acta_normalizado"),
+                mapped_row.get("fecha_audiencia"),
+                mapped_row.get("sala_normalizada"),
+            )
+            mapped_row["id_estructura_acta"] = estructura_id_by_key.get(key)
+
+        hash_payload = business_hash_payload(
+            mapped_row,
+            AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS,
+        )
+        mapped_row["hash_audiencia_caso"] = sha256_dict(hash_payload)
+        rows.append(mapped_row)
+
+    return rows
+
+
 def prepare_error_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
 
@@ -351,6 +497,40 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
             ),
         ]
 
+    if source_key == "ACTA_AUDIENCIA_PDF":
+        actas = result.get("tabla_estructura_acta") or result.get("tabla_actas_audiencia_pdf") or []
+        casos = result.get("tabla_audiencia_caso") or result.get("tabla_acta_audiencia_casos") or []
+
+        return [
+            _regla_row(
+                id_archivo,
+                "LEER_PDF_ACTA_AUDIENCIA",
+                "LECTURA",
+                len(actas),
+                len(actas),
+                status,
+                "Extraccion de texto y metadatos desde PDF de acta de audiencia",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLA_ACTA_AUDIENCIA_PDF",
+                "TRANSFORMACION",
+                len(actas),
+                len(actas),
+                status,
+                "Preparacion de actas de audiencia PDF",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLA_CASOS_ACTA_AUDIENCIA",
+                "TRANSFORMACION",
+                len(casos),
+                len(casos),
+                status,
+                "Preparacion de casos detectados en acta de audiencia",
+            ),
+        ]
+
     raise ValueError(f"source no soportado: {source}")
 
 
@@ -383,5 +563,22 @@ def prepare_all_from_correo_result(id_archivo: int, result: dict[str, Any]) -> d
             id_archivo,
             result,
             "CORREO_CERTIFICADO",
+        ),
+    }
+
+
+def prepare_all_from_audiencias_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "jnc.etl_archivo_cargado": prepare_archivo_update_from_audiencias_result(
+            id_archivo,
+            result,
+        ),
+        "jnc.etl_estructura_acta": prepare_estructura_acta_rows(id_archivo, result),
+        "jnc.audiencia_caso": prepare_audiencia_caso_rows(id_archivo, result),
+        "jnc.etl_error_procesamiento": prepare_error_rows(id_archivo, result),
+        "jnc.etl_ejecucion_regla": prepare_regla_rows(
+            id_archivo,
+            result,
+            "ACTA_AUDIENCIA_PDF",
         ),
     }

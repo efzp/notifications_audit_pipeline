@@ -9,9 +9,11 @@ from typing import Any
 import azure.functions as func
 
 import procesador
+import procesador_audiencias
 import procesador_correo
 import procesador_guias
 from src.load import db
+from src.load.write_audiencias import write_audiencias_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_salas import write_salas_result_to_sql
 
@@ -248,6 +250,16 @@ def procesar_correo_certificado(req: func.HttpRequest) -> func.HttpResponse:
         "procesar_correo_certificado",
         procesador_correo.process_payload_data,
         write_correo_result_to_sql,
+    )
+
+
+@app.route(route="procesar_input_pdf_audiencias", methods=["POST"])
+def procesar_input_pdf_audiencias(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_input_pdf_audiencias",
+        procesador_audiencias.process_payload_data,
+        write_audiencias_result_to_sql,
     )
 
 

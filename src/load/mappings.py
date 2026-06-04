@@ -86,6 +86,51 @@ CORREO_CERTIFICADO_FIELD_MAP: dict[str, str] = {
 }
 
 
+ESTRUCTURA_ACTA_FIELD_MAP: dict[str, str] = {
+    "numero_acta": "numero_acta",
+    "numero_acta_normalizado": "numero_acta_normalizado",
+    "fecha_audiencia": "fecha_audiencia",
+    "sala": "sala",
+    "sala_normalizada": "sala_normalizada",
+    "numero_paginas": "numero_paginas",
+    "cantidad_casos": "cantidad_casos",
+    "medicos_firmantes": "medicos_firmantes_json",
+    "terapeuta_o_psicologo": "terapeuta_o_psicologo",
+    "proyectado_por": "proyectado_por",
+    "documento_cuenta_con_firmas": "documento_cuenta_con_firmas",
+    "estado_validacion_firmas": "estado_validacion_firmas",
+    "firmantes_validados": "firmantes_validados_json",
+    "criterio_validacion_firmas": "criterio_validacion_firmas",
+    "asistentes_detectados": "asistentes_detectados_json",
+    "casos_detectados": "casos_detectados_json",
+    "radicados_detectados": "radicados_detectados_json",
+    "cedulas_detectadas": "cedulas_detectadas_json",
+    "texto_completo": "texto_completo",
+    "texto_paginas": "texto_paginas_json",
+    "metadata_pdf": "metadata_pdf_json",
+}
+
+
+AUDIENCIA_CASO_FIELD_MAP: dict[str, str] = {
+    "numero_orden": "numero_orden",
+    "numero_radicado": "numero_radicado",
+    "nombre_paciente": "nombre_paciente",
+    "tipo_identificacion": "tipo_identificacion",
+    "numero_identificacion": "numero_identificacion",
+    "entidad_remitente": "entidad_remitente",
+    "medico_ponente": "medico_ponente",
+    "medico_principal": "medico_principal",
+    "terapeuta_psicologa": "terapeuta_psicologa",
+    "fecha_audiencia": "fecha_audiencia",
+    "sala": "sala",
+    "sala_normalizada": "sala_normalizada",
+    "numero_acta": "numero_acta",
+    "numero_acta_normalizado": "numero_acta_normalizado",
+    "fila_texto": "fila_texto",
+    "fila_caso": "fila_caso_json",
+}
+
+
 ESTRUCTURA_HOJA_JSON_FIELDS: set[str] = {
     "ubicacion_columnas_wide_json",
     "ubicacion_columnas_detalle_json",
@@ -96,4 +141,16 @@ ESTRUCTURA_HOJA_JSON_FIELDS: set[str] = {
 CORREO_CERTIFICADO_JSON_FIELDS: set[str] = {
     "numeros_asunto_json",
     "numeros_adjuntos_json",
+}
+
+
+ESTRUCTURA_ACTA_JSON_FIELDS: set[str] = {
+    "medicos_firmantes_json",
+    "firmantes_validados_json",
+    "asistentes_detectados_json",
+    "radicados_detectados_json",
+    "cedulas_detectadas_json",
+    "casos_detectados_json",
+    "texto_paginas_json",
+    "metadata_pdf_json",
 }
