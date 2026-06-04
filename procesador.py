@@ -10,11 +10,6 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 
-from openpyxl import load_workbook
-from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
-from openpyxl.utils.datetime import from_excel
-
-
 PAYLOAD_PATH = Path("payload.json")
 
 REQUIRED_FIELDS = {
@@ -151,13 +146,45 @@ NOTIFICATION_METADATA_FIELDS = {
 
 COLUMN_NAME_ALIASES = {
     "n": "numero",
+    "n_": "numero",
     "no": "numero",
+    "item": "numero",
+    "radicado": "numero_radicado",
     "no_radicado": "numero_radicado",
     "numero_radicado": "numero_radicado",
     "cedula": "cedula",
+    "cedula_paciente": "cedula",
     "nombre_del_paciente": "nombre_del_paciente",
+    "nombre_paciente": "nombre_del_paciente",
+    "entidad": "entidad_remitente",
+    "responsable_pago": "responsable_del_pago",
+    "responsable_de_pago": "responsable_del_pago",
+    "terapeuta": "terapeuta_o_psicologa",
+    "psicologa": "terapeuta_o_psicologa",
+    "psicologa_terapeuta": "terapeuta_o_psicologa",
+    "terapeuta_o_sicologa": "terapeuta_o_psicologa",
+    "aseguradora_cia": "aseguradoras",
+    "cia_seguros": "aseguradoras",
+    "compania_de_seguros": "aseguradoras",
+    "fecha_envio": "fecha_de_envio",
+    "fecha_recibido": "fecha_de_recibido",
     "fecha": "fecha_pago_dictamen",
     "correo_guia": "correo_guia",
+    "correo_guias": "correo_guia",
+    "correo": "correo",
+    "correos": "correo",
+    "correos_juntas": "correo",
+    "correos_regional": "correo",
+    "correo_paciente": "correo",
+    "correos_pacientes": "correo",
+    "correos_empleador": "correo",
+    "correos_remitente": "correo",
+    "correos_entidad_remitente": "correo",
+    "correos_eps": "correo",
+    "correos_afp": "correo",
+    "correos_arl": "correo",
+    "correos_cia": "correo",
+    "correo_regional": "correo",
     "correo_regional": "regional_correo",
     "correo_remitente": "remitente_correo",
     "correo_eps": "eps_correo",
@@ -170,15 +197,24 @@ COLUMN_NAME_ALIASES = {
 WIDE_HEADER_ALIASES = {
     "REGIONAL": "regional",
     "PACIENTES": "pacientes",
+    "PACIENTE": "pacientes",
     "EMPLEADOR": "empleador",
     "REMITENTE": "remitente",
+    "ENTIDAD REMITENTE": "remitente",
+    "ENTIDADES REMITENTES": "remitente",
     "EPS": "eps",
+    "ENTIDADES PROMOTORAS DE SALUD": "eps",
     "AFP": "afp",
+    "FONDOS DE PENSIONES": "afp",
     "ARL": "arl",
+    "ADMINISTRADORAS DE RIESGOS LABORALES": "arl",
     "ASEGURADORAS": "aseguradoras",
     "ASEGURDADORAS": "aseguradoras",
+    "COMPAÑIA DE SEGUROS": "aseguradoras",
+    "COMPAÑIAS DE SEGUROS": "aseguradoras",
+    "COMPANIA DE SEGUROS": "aseguradoras",
+    "COMPANIAS DE SEGUROS": "aseguradoras",
 }
-
 
 def load_payload(path: Path) -> dict:
     if not path.exists():
@@ -222,10 +258,26 @@ def validate_xlsx(content: bytes) -> list[str]:
     return names
 
 
+def validate_excel_content(content: bytes, file_name: str) -> tuple[str, list[str]]:
+    if content.startswith(b"PK"):
+        return "xlsx", validate_xlsx(content)
+
+    try:
+        import xlrd
+
+        workbook = xlrd.open_workbook(file_contents=content, on_demand=True)
+    except Exception as exc:
+        raise ValueError("El contenido decodificado no parece ser un archivo XLSX/XLS valido") from exc
+
+    return "xls", workbook.sheet_names()
+
+
 def normalize_year(year: str) -> int:
     value = int(year)
     if value < 100:
         return 2000 + value
+    if value < 1000:
+        return 2000 + (value % 100)
     return value
 
 
@@ -342,6 +394,8 @@ def normalize_date_value(value: object) -> str | None:
 
     if isinstance(value, (int, float)):
         try:
+            from openpyxl.utils.datetime import from_excel
+
             return from_excel(value).date().isoformat()
         except (TypeError, ValueError, OverflowError):
             return None
@@ -456,6 +510,8 @@ def compact_locations(locations: dict[str, list[str]]) -> dict[str, str | list[s
 
 
 def get_column_index(coordinate: str) -> int:
+    from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
+
     column_letter, _ = coordinate_from_string(coordinate)
     return column_index_from_string(column_letter)
 
@@ -1040,31 +1096,62 @@ def extract_dated_sheets(workbook) -> list[dict]:
 def process_payload_data(payload: dict) -> dict:
     payload = validate_payload(payload)
     content = decode_file(payload)
-    entries = validate_xlsx(content)
-    workbook = load_workbook(BytesIO(content), read_only=False, data_only=True)
-    dated_sheets = extract_dated_sheets(workbook)
-    standard_column_dictionary = build_standard_column_dictionary(dated_sheets)
-    mensaje_error = [
-        {
-            "pestana": sheet["pestana_nombre"],
-            "tipo_error": "estructura_invalida",
-            "cumplimiento": sheet["estructura_cumplimiento"],
-            "umbral": sheet["estructura_umbral"],
-            "campos_esperados": sheet["estructura_campos_esperados"],
-            "campos_encontrados": sheet["estructura_campos_encontrados"],
-            "faltantes": sheet["estructura_faltantes"],
-            "mensaje": "La hoja no cumple con el 90% de la estructura requerida",
-        }
-        for sheet in dated_sheets
-        if not sheet["estructura_valida"]
-    ]
+    file_kind, entries = validate_excel_content(content, payload["nombre_archivo"])
+    mode = "TEMPLATE_ACTUAL"
 
-    status = "ERROR" if mensaje_error else "OK"
-    base_case_table = [] if mensaje_error else extract_base_case_table(workbook, dated_sheets)
-    notification_table = [] if mensaje_error else extract_notification_table(workbook, dated_sheets)
+    if file_kind == "xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(BytesIO(content), read_only=False, data_only=True)
+        dated_sheets = extract_dated_sheets(workbook)
+        standard_column_dictionary = build_standard_column_dictionary(dated_sheets)
+        mensaje_error = [
+            {
+                "pestana": sheet["pestana_nombre"],
+                "tipo_error": "estructura_invalida",
+                "cumplimiento": sheet["estructura_cumplimiento"],
+                "umbral": sheet["estructura_umbral"],
+                "campos_esperados": sheet["estructura_campos_esperados"],
+                "campos_encontrados": sheet["estructura_campos_encontrados"],
+                "faltantes": sheet["estructura_faltantes"],
+                "mensaje": "La hoja no cumple con el 90% de la estructura requerida",
+            }
+            for sheet in dated_sheets
+            if not sheet["estructura_valida"]
+        ]
+        status = "ERROR" if mensaje_error else "OK"
+        base_case_table = [] if mensaje_error else extract_base_case_table(workbook, dated_sheets)
+        notification_table = [] if mensaje_error else extract_notification_table(workbook, dated_sheets)
+    else:
+        dated_sheets = []
+        standard_column_dictionary = {}
+        mensaje_error = []
+        status = "ERROR"
+        base_case_table = []
+        notification_table = []
+
+    from procesador_raw import try_process_raw_payload
+
+    raw_result = try_process_raw_payload(
+        payload,
+        content,
+        file_kind,
+        status,
+        base_case_table,
+        notification_table,
+    )
+    if raw_result:
+        mode = raw_result["modo_procesamiento"]
+        status = "OK"
+        mensaje_error = []
+        dated_sheets = raw_result["hojas_con_fecha"]
+        standard_column_dictionary = raw_result["diccionario_estandar_columnas"]
+        base_case_table = raw_result["tabla_casos"]
+        notification_table = raw_result["tabla_notificaciones"]
 
     return {
         "status": status,
+        "modo_procesamiento": mode,
         "tipo_archivo": payload["tipo_archivo"],
         "nombre_archivo": payload["nombre_archivo"],
         "ruta_sharepoint": payload["ruta_sharepoint"],

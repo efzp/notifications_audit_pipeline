@@ -13,6 +13,9 @@ from src.load.timing import timed_step
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 
 
+RAW_ORIGIN = "RAW_INPUT_SALAS"
+
+
 def _fetch_case_id_map(id_archivo: int) -> dict[str, int]:
     rows = db.fetch_rows(
         "jnc.caso_calificado",
@@ -31,6 +34,108 @@ def _fetch_case_id_map(id_archivo: int) -> dict[str, int]:
     return case_id_by_key
 
 
+def _chunks(values: list[str], size: int = 900):
+    for index in range(0, len(values), size):
+        yield values[index : index + size]
+
+
+def _delete_raw_rows_for_consolidated_radicados(radicados: list[str]) -> dict[str, int]:
+    clean_radicados = sorted({radicado for radicado in radicados if radicado})
+    if not clean_radicados:
+        return {"notificaciones_raw_eliminadas": 0, "casos_raw_eliminados": 0}
+
+    deleted_notifications = 0
+    deleted_cases = 0
+    for chunk in _chunks(clean_radicados):
+        placeholders = ", ".join("?" for _ in chunk)
+        deleted_notifications += db.execute_sql(
+            (
+                "DELETE FROM jnc.notificacion_esperada "
+                "WHERE origen_tabla = ? "
+                f"AND numero_radicado_normalizado IN ({placeholders})"
+            ),
+            [RAW_ORIGIN, *chunk],
+        )
+        deleted_cases += db.execute_sql(
+            (
+                "DELETE FROM jnc.caso_calificado "
+                "WHERE origen_tabla = ? "
+                f"AND numero_radicado_normalizado IN ({placeholders})"
+            ),
+            [RAW_ORIGIN, *chunk],
+        )
+
+    return {
+        "notificaciones_raw_eliminadas": deleted_notifications,
+        "casos_raw_eliminados": deleted_cases,
+    }
+
+
+def _backfill_sala_from_audiencia_caso() -> dict[str, int]:
+    notificaciones_actualizadas = db.execute_sql(
+        """
+        UPDATE ne
+        SET
+            hoja_trabajo_sala = COALESCE(ne.hoja_trabajo_sala, ac.sala),
+            hoja_trabajo_sala_normalizada = COALESCE(
+                ne.hoja_trabajo_sala_normalizada,
+                ac.sala_normalizada
+            ),
+            pestana_sala_normalizada = COALESCE(
+                ne.pestana_sala_normalizada,
+                ac.sala_normalizada
+            ),
+            hoja_trabajo_fecha_audiencia = COALESCE(
+                ne.hoja_trabajo_fecha_audiencia,
+                ac.fecha_audiencia
+            ),
+            fecha_actualizacion = SYSUTCDATETIME()
+        FROM jnc.notificacion_esperada ne
+        INNER JOIN jnc.audiencia_caso ac
+            ON ac.numero_radicado_normalizado = ne.numero_radicado_normalizado
+        WHERE ne.numero_radicado_normalizado IS NOT NULL
+          AND (
+              ne.hoja_trabajo_sala_normalizada IS NULL
+              OR ne.hoja_trabajo_sala IS NULL
+              OR ne.hoja_trabajo_fecha_audiencia IS NULL
+          )
+        """
+    )
+    casos_actualizados = db.execute_sql(
+        """
+        UPDATE cc
+        SET
+            hoja_trabajo_sala = COALESCE(cc.hoja_trabajo_sala, ac.sala),
+            hoja_trabajo_sala_normalizada = COALESCE(
+                cc.hoja_trabajo_sala_normalizada,
+                ac.sala_normalizada
+            ),
+            pestana_sala_normalizada = COALESCE(
+                cc.pestana_sala_normalizada,
+                ac.sala_normalizada
+            ),
+            hoja_trabajo_fecha_audiencia = COALESCE(
+                cc.hoja_trabajo_fecha_audiencia,
+                ac.fecha_audiencia
+            ),
+            fecha_actualizacion = SYSUTCDATETIME()
+        FROM jnc.caso_calificado cc
+        INNER JOIN jnc.audiencia_caso ac
+            ON ac.numero_radicado_normalizado = cc.numero_radicado_normalizado
+        WHERE cc.numero_radicado_normalizado IS NOT NULL
+          AND (
+              cc.hoja_trabajo_sala_normalizada IS NULL
+              OR cc.hoja_trabajo_sala IS NULL
+              OR cc.hoja_trabajo_fecha_audiencia IS NULL
+          )
+        """
+    )
+    return {
+        "notificaciones_sala_actualizadas": notificaciones_actualizadas,
+        "casos_sala_actualizados": casos_actualizados,
+    }
+
+
 def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "status": "OK",
@@ -41,6 +146,8 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         "errores_insertados": 0,
         "reglas_insertadas": 0,
         "cruce_notificaciones": {},
+        "prioridad_consolidado": {},
+        "backfill_sala": {},
         "timings": {},
         "mensaje": "Resultado de salas escrito en Azure SQL",
     }
@@ -113,6 +220,18 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                 "prepare_caso_calificado",
                 lambda: prepare_caso_rows(id_archivo, result),
             )
+            if result.get("modo_procesamiento") != RAW_ORIGIN:
+                consolidated_radicados = [
+                    row.get("numero_radicado_normalizado")
+                    for row in caso_rows
+                ]
+                summary["prioridad_consolidado"] = timed_step(
+                    timings,
+                    "delete_raw_prioridad_consolidado",
+                    lambda: _delete_raw_rows_for_consolidated_radicados(
+                        consolidated_radicados
+                    ),
+                )
             summary["casos_insertados"] = timed_step(
                 timings,
                 "insert_caso_calificado",
@@ -136,6 +255,11 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                 timings,
                 "insert_notificacion_esperada",
                 lambda: db.insert_many("jnc.notificacion_esperada", notificacion_rows),
+            )
+            summary["backfill_sala"] = timed_step(
+                timings,
+                "backfill_sala_desde_audiencia_caso",
+                _backfill_sala_from_audiencia_caso,
             )
 
         summary["errores_insertados"] = timed_step(

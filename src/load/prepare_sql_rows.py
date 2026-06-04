@@ -277,7 +277,7 @@ def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str,
         )
         mapped_row["fecha_pago_dictamen"] = normalize_date(mapped_row.get("fecha_pago_dictamen"))
         mapped_row["tabla_caso_json"] = json_dumps_safe(source_row)
-        mapped_row["origen_tabla"] = "tabla_casos"
+        mapped_row["origen_tabla"] = source_row.get("origen_tabla") or "tabla_casos"
         mapped_row["activo"] = 1
         mapped_row["fecha_creacion"] = utc_now_iso()
 
@@ -330,7 +330,7 @@ def prepare_notificacion_rows(
             )
 
         mapped_row["tabla_notificacion_json"] = json_dumps_safe(source_row)
-        mapped_row["origen_tabla"] = "tabla_notificaciones"
+        mapped_row["origen_tabla"] = source_row.get("origen_tabla") or "tabla_notificaciones"
         mapped_row["activo"] = 1
         mapped_row["fecha_creacion"] = utc_now_iso()
 

@@ -218,6 +218,7 @@ def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
         "correo_normalizado",
         "hoja_trabajo_fecha_audiencia",
         "fecha_envio_reportada",
+        "origen_tabla",
         "activo",
     ]
     optional_columns = [
@@ -237,6 +238,36 @@ def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
         params.append(id_archivo_salas)
 
     return db.fetch_rows("jnc.notificacion_esperada", columns, where, params)
+
+
+def _fetch_latest_audiencia_caso_date() -> date | None:
+    value = db.fetch_scalar_sql(
+        "SELECT MAX(fecha_audiencia) FROM jnc.audiencia_caso WHERE fecha_audiencia IS NOT NULL"
+    )
+    return _parse_date(value)
+
+
+def _filter_raw_by_latest_audiencia_date(
+    expected_rows: list[dict[str, Any]],
+    latest_audience_date: date | None,
+) -> tuple[list[dict[str, Any]], int]:
+    if latest_audience_date is None:
+        return expected_rows, 0
+
+    filtered_rows = []
+    skipped = 0
+    for row in expected_rows:
+        if row.get("origen_tabla") != "RAW_INPUT_SALAS":
+            filtered_rows.append(row)
+            continue
+
+        row_date = _parse_date(row.get("hoja_trabajo_fecha_audiencia"))
+        if row_date == latest_audience_date:
+            filtered_rows.append(row)
+        else:
+            skipped += 1
+
+    return filtered_rows, skipped
 
 
 def _expected_reference_date(row: dict[str, Any]) -> date | None:
@@ -751,6 +782,11 @@ def recalcular_cruce_notificaciones(
     solo_pendientes: bool = True,
 ) -> dict[str, Any]:
     all_expected_rows = _fetch_expected_rows(id_archivo_salas)
+    latest_audiencia_caso_date = _fetch_latest_audiencia_caso_date()
+    all_expected_rows, raw_skipped_by_date = _filter_raw_by_latest_audiencia_date(
+        all_expected_rows,
+        latest_audiencia_caso_date,
+    )
     expected_rows = all_expected_rows
     if solo_pendientes:
         expected_rows = [
@@ -773,6 +809,10 @@ def recalcular_cruce_notificaciones(
     }
     summary = {
         "notificaciones_evaluadas": len(expected_rows),
+        "raw_omitidas_por_fecha_audiencia": raw_skipped_by_date,
+        "fecha_audiencia_caso_maxima": latest_audiencia_caso_date.isoformat()
+        if latest_audiencia_caso_date
+        else None,
         "notificaciones_actualizadas": 0,
         "correos_evaluados": len(correo_rows),
         "ventana_correo_desde": date_window[0].isoformat() if date_window else None,
@@ -870,6 +910,11 @@ def recalcular_cruce_notificaciones(
         summary["cruces_insertados"] = db.insert_many(
             "jnc.resultado_cruce_notificacion",
             cruce_rows,
+        )
+    elif not solo_pendientes and id_archivo_salas is not None:
+        summary["cruces_eliminados"] = db.delete_by_archivo(
+            "jnc.resultado_cruce_notificacion",
+            id_archivo_salas,
         )
 
     summary["notificaciones_actualizadas"] = db.execute_many_updates(
