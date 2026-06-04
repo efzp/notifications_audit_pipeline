@@ -401,7 +401,14 @@ def extract_case_rows(text: str) -> list[dict[str, Any]]:
     row_pattern = re.compile(
         r"(?P<orden>\d{1,3})\s+"
         r"(?P<numero_caso>JN\d+(?:\s*-\s*\d+)?)\s+"
-        r"(?P<body>.*?)(?=\s+\d{1,3}\s+JN\d+|\s+3\s*-\s*DECISIONES|\s+Página\s+\d+\s+de\s+\d+|$)",
+        r"(?P<body>.*?)(?="
+        r"\s+\d{1,3}\s+JN\d+"
+        r"|\s+(?:3\s*-\s*)?DECISIONES\b"
+        r"|\s+La cantidad de elementos es de\b"
+        r"|\s+Se abre el debate\b"
+        r"|\s+ACTA GENERAL DE AUDIENCIA\b"
+        r"|\s+Página\s+\d+\s+de\s+\d+"
+        r"|$)",
         flags=re.IGNORECASE,
     )
     id_pattern = re.compile(

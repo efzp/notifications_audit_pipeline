@@ -15,6 +15,7 @@ import procesador_guias
 from src.load import db
 from src.load.write_audiencias import write_audiencias_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
+from src.load.write_guias import write_guias_result_to_sql
 from src.load.write_salas import write_salas_result_to_sql
 
 
@@ -265,8 +266,9 @@ def procesar_input_pdf_audiencias(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="procesar_guias_correo_fisico", methods=["POST"])
 def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
-    return handle_read_processing(
+    return handle_sql_processing(
         req,
         "procesar_guias_correo_fisico",
         procesador_guias.process_payload_data,
+        write_guias_result_to_sql,
     )

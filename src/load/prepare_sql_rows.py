@@ -26,6 +26,63 @@ from src.utils.normalization import (
 
 SCRIPT_VERSION = "1.0"
 
+GUIA_CORREO_FISICO_MAX_LENGTHS = {
+    "hoja_origen": 255,
+    "guia": 100,
+    "estado": 255,
+    "cuenta": 100,
+    "servicio": 100,
+    "regional_destino": 255,
+    "ciudad_destino": 255,
+    "nom_departamento": 255,
+    "nombre_destinatario": 500,
+    "direccion_destinatario": 1000,
+    "numero_documento": 100,
+    "dice_contener": 500,
+    "tel_destinatario": 100,
+    "nom_remitente": 500,
+    "dir_remitente": 1000,
+    "tel_remitente": 100,
+    "cod_novedad": 100,
+    "des_novedad": 500,
+    "tipo_novedad": 255,
+    "imputabilidad": 255,
+    "cod_servicio": 100,
+    "factura": 100,
+    "ctro_costo": 100,
+    "accion_notaguia": 500,
+    "num_cliente": 100,
+    "ced_destinatario": 100,
+    "ced_destinatario_normalizada": 100,
+    "regionalo": 255,
+    "des_estadog": 255,
+    "cartaporte": 100,
+    "cubrimiento": 100,
+    "hash_guia": 64,
+}
+
+AUDIENCIA_CASO_MAX_LENGTHS = {
+    "numero_acta": 100,
+    "numero_acta_normalizado": 100,
+    "sala": 255,
+    "sala_normalizada": 50,
+    "numero_radicado": 100,
+    "numero_radicado_normalizado": 100,
+    "nombre_paciente": 500,
+    "nombre_paciente_normalizado": 500,
+    "tipo_identificacion": 50,
+    "numero_identificacion": 50,
+    "numero_identificacion_normalizado": 50,
+    "entidad_remitente": 500,
+    "entidad_remitente_normalizado": 500,
+    "medico_ponente": 500,
+    "medico_ponente_normalizado": 500,
+    "medico_principal": 500,
+    "medico_principal_normalizado": 500,
+    "terapeuta_psicologa": 500,
+    "terapeuta_psicologa_normalizado": 500,
+}
+
 CASO_HASH_EXCLUDED_FIELDS = {
     "id_archivo",
     "tabla_caso_json",
@@ -72,6 +129,15 @@ def business_hash_payload(
         key: value
         for key, value in row.items()
         if key not in excluded_fields
+    }
+
+
+def truncate_text_fields(row: dict[str, Any], max_lengths: dict[str, int]) -> dict[str, Any]:
+    return {
+        key: value[: max_lengths[key]]
+        if key in max_lengths and isinstance(value, str)
+        else value
+        for key, value in row.items()
     }
 
 
@@ -137,6 +203,40 @@ def prepare_archivo_update_from_audiencias_result(id_archivo: int, result: dict[
         "estado_proceso": "PROCESADO"
         if result.get("status") == "OK"
         else "ERROR_PROCESAMIENTO",
+        "fecha_fin_proceso": utc_now_iso(),
+    }
+
+
+def prepare_archivo_update_from_guias_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    total_rows = result.get("total_filas_guias_correo_fisico") or len(
+        result.get("tabla_guias_correo_fisico") or []
+    )
+
+    return {
+        "id_archivo": id_archivo,
+        "procesador_status": result.get("status"),
+        "tamano_bytes": result.get("tamano_bytes"),
+        "total_filas_guias_correo_fisico": total_rows,
+        "encabezados_originales_json": json_dumps_safe(
+            [
+                header
+                for hoja in result.get("hojas") or []
+                for header in hoja.get("encabezados_originales") or []
+            ]
+        ),
+        "encabezados_normalizados_json": json_dumps_safe(
+            [
+                header
+                for hoja in result.get("hojas") or []
+                for header in hoja.get("encabezados_normalizados") or []
+            ]
+        ),
+        "mensaje_error": json_dumps_safe(result.get("estructura"))
+        if result.get("status") != "OK"
+        else None,
+        "estado_proceso": "PROCESADO"
+        if result.get("status") == "OK"
+        else "ERROR_ESTRUCTURA",
         "fecha_fin_proceso": utc_now_iso(),
     }
 
@@ -379,11 +479,45 @@ def prepare_audiencia_caso_rows(
             )
             mapped_row["id_estructura_acta"] = estructura_id_by_key.get(key)
 
+        mapped_row = truncate_text_fields(mapped_row, AUDIENCIA_CASO_MAX_LENGTHS)
         hash_payload = business_hash_payload(
             mapped_row,
             AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS,
         )
         mapped_row["hash_audiencia_caso"] = sha256_dict(hash_payload)
+        rows.append(mapped_row)
+
+    return rows
+
+
+def prepare_guia_correo_fisico_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+
+    for source_row in result.get("tabla_guias_correo_fisico") or []:
+        mapped_row = dict(source_row)
+        mapped_row["id_archivo"] = id_archivo
+        mapped_row["ced_destinatario_normalizada"] = normalize_document(
+            mapped_row.get("ced_destinatario") or mapped_row.get("numero_documento")
+        )
+        mapped_row["fila_guia_json"] = json_dumps_safe(source_row)
+        mapped_row["fecha_creacion"] = utc_now_iso()
+
+        hash_payload = {
+            key: value
+            for key, value in mapped_row.items()
+            if key not in {
+                "id_archivo",
+                "fila_guia_json",
+                "hash_guia",
+                "fecha_creacion",
+                "fecha_actualizacion",
+            }
+        }
+        mapped_row["hash_guia"] = sha256_dict(hash_payload)
+        mapped_row = truncate_text_fields(mapped_row, GUIA_CORREO_FISICO_MAX_LENGTHS)
         rows.append(mapped_row)
 
     return rows
@@ -404,6 +538,22 @@ def prepare_error_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str
                 "requiere_revision": 1,
                 "fecha_error": utc_now_iso(),
                 "detalle_error_json": json_dumps_safe(error),
+            }
+        )
+
+    if result.get("status") != "OK" and result.get("estructura"):
+        rows.append(
+            {
+                "id_archivo": id_archivo,
+                "etapa": "VALIDACION_ESTRUCTURA",
+                "tipo_error": "estructura_invalida",
+                "detalle_error": result["estructura"].get("mensaje")
+                or json_dumps_safe(result["estructura"]),
+                "hoja_origen": None,
+                "severidad": "ERROR",
+                "requiere_revision": 1,
+                "fecha_error": utc_now_iso(),
+                "detalle_error_json": json_dumps_safe(result["estructura"]),
             }
         )
 
@@ -531,6 +681,31 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
             ),
         ]
 
+    if source_key == "GUIAS_CORREO_FISICO":
+        rows = result.get("tabla_guias_correo_fisico") or []
+        hojas = result.get("hojas") or []
+
+        return [
+            _regla_row(
+                id_archivo,
+                "LEER_XLS_GUIAS_CORREO_FISICO",
+                "LECTURA",
+                len(hojas),
+                len(hojas),
+                status,
+                "Lectura de archivo XLS de guias de correo fisico",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLA_GUIAS_CORREO_FISICO",
+                "TRANSFORMACION",
+                len(rows),
+                len(rows),
+                status,
+                "Preparacion de guias de correo fisico",
+            ),
+        ]
+
     raise ValueError(f"source no soportado: {source}")
 
 
@@ -580,5 +755,21 @@ def prepare_all_from_audiencias_result(id_archivo: int, result: dict[str, Any]) 
             id_archivo,
             result,
             "ACTA_AUDIENCIA_PDF",
+        ),
+    }
+
+
+def prepare_all_from_guias_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "jnc.etl_archivo_cargado": prepare_archivo_update_from_guias_result(
+            id_archivo,
+            result,
+        ),
+        "jnc.guia_correo_fisico": prepare_guia_correo_fisico_rows(id_archivo, result),
+        "jnc.etl_error_procesamiento": prepare_error_rows(id_archivo, result),
+        "jnc.etl_ejecucion_regla": prepare_regla_rows(
+            id_archivo,
+            result,
+            "GUIAS_CORREO_FISICO",
         ),
     }

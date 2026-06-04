@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.load.prepare_sql_rows import (
     prepare_all_from_audiencias_result,
     prepare_all_from_correo_result,
+    prepare_all_from_guias_result,
     prepare_all_from_salas_result,
 )
 
@@ -19,7 +20,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepara filas SQL desde resultados JSON de los procesadores."
     )
-    parser.add_argument("--source", choices=("salas", "correo", "audiencias"), required=True)
+    parser.add_argument(
+        "--source",
+        choices=("salas", "correo", "audiencias", "guias"),
+        required=True,
+    )
     parser.add_argument("--input", required=True, help="Ruta al JSON de resultado del procesador")
     parser.add_argument("--id-archivo", type=int, required=True)
     return parser.parse_args()
@@ -63,8 +68,10 @@ def main() -> int:
         prepared = prepare_all_from_salas_result(args.id_archivo, result)
     elif args.source == "correo":
         prepared = prepare_all_from_correo_result(args.id_archivo, result)
-    else:
+    elif args.source == "audiencias":
         prepared = prepare_all_from_audiencias_result(args.id_archivo, result)
+    else:
+        prepared = prepare_all_from_guias_result(args.id_archivo, result)
 
     summary = {
         table_name: {

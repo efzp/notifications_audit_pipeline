@@ -12,6 +12,7 @@ ALLOWED_TABLES = {
     "jnc.caso_calificado",
     "jnc.notificacion_esperada",
     "jnc.notificacion_correo_certificado",
+    "jnc.guia_correo_fisico",
     "jnc.etl_estructura_acta",
     "jnc.audiencia_caso",
     "jnc.etl_error_procesamiento",
@@ -272,6 +273,61 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _parse_time(value: Any) -> time | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.time().replace(microsecond=0)
+    if isinstance(value, time):
+        return value.replace(microsecond=0)
+    if isinstance(value, date):
+        return None
+
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        if numeric_value < 0:
+            return None
+
+        fraction = numeric_value % 1
+        total_seconds = int(round(fraction * 24 * 60 * 60)) % (24 * 60 * 60)
+        hour, remainder = divmod(total_seconds, 60 * 60)
+        minute, second = divmod(remainder, 60)
+        return time(hour, minute, second)
+
+    clean_value = str(value).strip()
+    if not clean_value:
+        return None
+
+    try:
+        return (
+            datetime.fromisoformat(clean_value.replace("Z", "+00:00"))
+            .time()
+            .replace(tzinfo=None, microsecond=0)
+        )
+    except ValueError:
+        pass
+
+    try:
+        return time.fromisoformat(clean_value).replace(tzinfo=None, microsecond=0)
+    except ValueError:
+        pass
+
+    for time_format in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p"):
+        try:
+            return datetime.strptime(clean_value, time_format).time()
+        except ValueError:
+            continue
+
+    try:
+        return _parse_time(Decimal(clean_value.replace(",", ".")))
+    except InvalidOperation:
+        return None
+
+
 def _coerce_value_for_sql(data_type: str | None, value: Any) -> Any:
     if value is None:
         return None
@@ -284,6 +340,9 @@ def _coerce_value_for_sql(data_type: str | None, value: Any) -> Any:
 
     if data_type in {"datetime", "datetime2", "smalldatetime"}:
         return _parse_datetime(value)
+
+    if data_type == "time":
+        return _parse_time(value)
 
     if data_type == "bit":
         if isinstance(value, bool):
@@ -403,7 +462,11 @@ def execute_many_updates(
     return _execute_with_optional_own_connection(operation)
 
 
-def insert_many(table_name: str, rows: list[dict[str, Any]]) -> int:
+def insert_many(
+    table_name: str,
+    rows: list[dict[str, Any]],
+    fast_executemany: bool | None = None,
+) -> int:
     if not rows:
         return 0
 
@@ -429,11 +492,14 @@ def insert_many(table_name: str, rows: list[dict[str, Any]]) -> int:
 
     def operation(connection):
         cursor = connection.cursor()
-        cursor.fast_executemany = os.environ.get("SQL_FAST_EXECUTEMANY", "").lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        if fast_executemany is None:
+            cursor.fast_executemany = os.environ.get("SQL_FAST_EXECUTEMANY", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+        else:
+            cursor.fast_executemany = fast_executemany
         cursor.executemany(sql, params)
         return len(rows)
 
