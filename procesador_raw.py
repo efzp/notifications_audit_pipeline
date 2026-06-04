@@ -447,12 +447,9 @@ def try_process_raw_payload(
     notification_table: list[dict],
 ) -> dict | None:
     should_try_raw = (
-        payload_allows_raw_processing(payload)
-        and (
-            file_kind == "xls"
-            or status != "OK"
-            or (not base_case_table and not notification_table)
-        )
+        file_kind == "xls"
+        or status != "OK"
+        or (not base_case_table and not notification_table)
     )
     if not should_try_raw:
         return None
