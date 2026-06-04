@@ -21,6 +21,30 @@ REQUIRED_FIELDS = {
 
 EXPECTED_FILE_TYPE = "GUIAS_CORREO_FISICO"
 
+EXCLUDED_NORMALIZED_HEADERS = {
+    "num_unidades",
+    "pesoreal",
+    "volumen",
+    "kilos_cobrados",
+    "valor_declarado",
+    "valor_flete",
+    "valor_costom",
+    "valor_otros",
+    "total",
+    "ciudad_origen",
+    "otra_guia",
+    "atiempo",
+    "atiempo_2",
+    "ofiori",
+    "valor_producto",
+    "num_transaccion",
+    "fec_citapactada",
+    "fec_venordencompra",
+    "codigo_zipcode_origen",
+    "codigo_zipcode_destino",
+    "cod_usr_crea",
+}
+
 
 def load_payload(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -131,12 +155,23 @@ def read_sheet_rows(book, sheet) -> dict[str, Any]:
 
     raw_headers = [clean_text_value(sheet.cell_value(0, col_index)) or "" for col_index in range(sheet.ncols)]
     normalized_headers = make_unique_headers(raw_headers)
+    included_columns = [
+        (col_index, raw_header, normalized_header)
+        for col_index, (raw_header, normalized_header) in enumerate(
+            zip(raw_headers, normalized_headers)
+        )
+        if normalized_header not in EXCLUDED_NORMALIZED_HEADERS
+    ]
+    included_raw_headers = [raw_header for _, raw_header, _ in included_columns]
+    included_normalized_headers = [
+        normalized_header for _, _, normalized_header in included_columns
+    ]
     rows = []
 
     for row_index in range(1, sheet.nrows):
         row = {
             header: normalize_cell_value(book, sheet.cell(row_index, col_index))
-            for col_index, header in enumerate(normalized_headers)
+            for col_index, _, header in included_columns
         }
         if not any(value not in (None, "") for value in row.values()):
             continue
@@ -147,8 +182,13 @@ def read_sheet_rows(book, sheet) -> dict[str, Any]:
 
     return {
         "nombre_hoja": sheet.name,
-        "encabezados_originales": raw_headers,
-        "encabezados_normalizados": normalized_headers,
+        "encabezados_originales": included_raw_headers,
+        "encabezados_normalizados": included_normalized_headers,
+        "encabezados_excluidos": [
+            normalized_header
+            for normalized_header in normalized_headers
+            if normalized_header in EXCLUDED_NORMALIZED_HEADERS
+        ],
         "total_filas": len(rows),
         "filas": rows,
     }
@@ -221,6 +261,7 @@ def load_guias_correo_xls(content: bytes) -> dict[str, Any]:
                 "filas": sheet_result["total_filas"],
                 "encabezados_originales": sheet_result["encabezados_originales"],
                 "encabezados_normalizados": sheet_result["encabezados_normalizados"],
+                "encabezados_excluidos": sheet_result["encabezados_excluidos"],
             }
             for sheet_result in sheet_results
         ],
