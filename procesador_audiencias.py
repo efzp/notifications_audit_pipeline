@@ -174,12 +174,16 @@ def extract_acta_number(text: str, file_name: str) -> str | None:
 def extract_room(text: str, file_name: str) -> str | None:
     for source in (file_name, text[:4000]):
         match = re.search(
-            r"\bsala\s*(?:n(?:o|umero)?\.?\s*)?(?P<room>[A-Za-z0-9]+)",
+            r"\bsala\s*(?:n(?:o|umero)?\.?\s*)?(?P<room>[A-Za-z0-9]+)(?:\s*[-–]?\s*(?P<suffix>descongesti[oó]n))?",
             source,
             flags=re.IGNORECASE,
         )
         if match:
-            return f"Sala {match.group('room')}"
+            room = f"Sala {match.group('room')}"
+            suffix = match.group("suffix")
+            if suffix:
+                room = f"{room} {suffix}"
+            return room
 
     return None
 

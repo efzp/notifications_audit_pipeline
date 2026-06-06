@@ -88,6 +88,7 @@ BEGIN
     WITH caso_base AS (
         SELECT
             cc.*,
+            ac_sala.sala AS sala_audiencia_caso,
             COALESCE(
                 cc.hoja_trabajo_fecha_audiencia,
                 cc.pestana_fecha,
@@ -111,6 +112,16 @@ BEGIN
                 END
             ) AS fecha_audiencia_resumen
         FROM jnc.caso_calificado AS cc
+        OUTER APPLY (
+            SELECT TOP (1)
+                ac.sala
+            FROM jnc.audiencia_caso AS ac
+            WHERE ac.activo = 1
+              AND ac.numero_radicado_normalizado = cc.numero_radicado_normalizado
+            ORDER BY
+                ac.fecha_audiencia DESC,
+                ac.id_audiencia_caso DESC
+        ) AS ac_sala
         WHERE cc.activo = 1
     ),
     notificacion_estado AS (
@@ -136,7 +147,7 @@ BEGIN
             cc.numero_radicado,
             cc.numero_radicado_normalizado,
             cc.pestana_nombre AS nombre_pestana,
-            cc.hoja_trabajo_sala AS sala,
+            cc.sala_audiencia_caso AS sala,
             cc.fecha_audiencia_resumen AS fecha_audiencia,
             MAX(ne.cedula) AS cedula,
             cc.nombre_paciente,
@@ -172,7 +183,7 @@ BEGIN
             cc.numero_radicado,
             cc.numero_radicado_normalizado,
             cc.pestana_nombre,
-            cc.hoja_trabajo_sala,
+            cc.sala_audiencia_caso,
             cc.fecha_audiencia_resumen,
             cc.nombre_paciente
     ),
