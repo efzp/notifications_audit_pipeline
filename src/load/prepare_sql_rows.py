@@ -141,6 +141,26 @@ def truncate_text_fields(row: dict[str, Any], max_lengths: dict[str, int]) -> di
     }
 
 
+def _prepare_archivo_identity_update(result: dict[str, Any]) -> dict[str, Any]:
+    update: dict[str, Any] = {}
+    nombre_archivo = result.get("nombre_archivo")
+    if nombre_archivo:
+        update["nombre_archivo"] = str(nombre_archivo)
+
+    extension_archivo = result.get("extension_archivo")
+    if not extension_archivo and nombre_archivo and "." in str(nombre_archivo):
+        extension_archivo = "." + str(nombre_archivo).rsplit(".", 1)[1]
+    if extension_archivo:
+        update["extension_archivo"] = str(extension_archivo)
+
+    for field_name in ("tipo_archivo", "ruta_sharepoint", "carpeta_origen", "carpeta_destino"):
+        value = result.get(field_name)
+        if value:
+            update[field_name] = str(value)
+
+    return update
+
+
 def prepare_archivo_update_from_salas_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
     hojas = result.get("hojas_con_fecha") or []
     mensaje_error = result.get("mensaje_error") or []
@@ -148,6 +168,7 @@ def prepare_archivo_update_from_salas_result(id_archivo: int, result: dict[str, 
 
     return {
         "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
         "procesador_status": result.get("status"),
         "tamano_bytes": result.get("tamano_bytes"),
         "entradas_xlsx": result.get("entradas_xlsx"),
@@ -172,6 +193,7 @@ def prepare_archivo_update_from_correo_result(id_archivo: int, result: dict[str,
 
     return {
         "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
         "procesador_status": result.get("status"),
         "tamano_bytes": result.get("tamano_bytes"),
         "delimitador_csv": result.get("delimitador_csv"),
@@ -196,6 +218,7 @@ def prepare_archivo_update_from_audiencias_result(id_archivo: int, result: dict[
 
     return {
         "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
         "procesador_status": result.get("status"),
         "tamano_bytes": result.get("tamano_bytes"),
         "total_actas_audiencia_pdf": total_actas,
@@ -214,6 +237,7 @@ def prepare_archivo_update_from_guias_result(id_archivo: int, result: dict[str, 
 
     return {
         "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
         "procesador_status": result.get("status"),
         "tamano_bytes": result.get("tamano_bytes"),
         "total_filas_guias_correo_fisico": total_rows,

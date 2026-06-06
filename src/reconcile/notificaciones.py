@@ -22,14 +22,18 @@ ESTADO_ASUNTO_NO_VALIDO = "ASUNTO_NO_VALIDO"
 ESTADO_EVENTO_NO_VALIDO = "EVENTO_NO_VALIDO"
 ESTADO_CORREO_NO_COINCIDE = "CORREO_NO_COINCIDE"
 ESTADO_FUERA_DE_PLAZO = "FUERA_DE_PLAZO"
+ESTADO_GUIA_NO_COINCIDE_CEDULA = "GUIA_NO_COINCIDE_CEDULA"
+ESTADO_GUIA_NO_COINCIDE = "GUIA_NO_COINCIDE"
 ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
 
 PLAZO_DIAS_CALENDARIO = 2
+GUIA_FECHA_VENTANA_DIAS = 7
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
 CRUCE_VERSION = "1.0"
 CORREO_FECHA_VENTANA_DIAS = 7
+GUIA_MATCH_DIGITS = 9
 
 
 def utc_now_iso() -> str:
@@ -143,6 +147,21 @@ def _extract_document_numbers(value: Any) -> set[str]:
             documents.add(document)
 
     return documents
+
+
+def _digits_only(value: Any) -> str:
+    if value is None:
+        return ""
+
+    return re.sub(r"\D+", "", str(value))
+
+
+def _right_digits(value: Any, length: int = GUIA_MATCH_DIGITS) -> str | None:
+    digits = _digits_only(value)
+    if len(digits) < length:
+        return None
+
+    return digits[-length:]
 
 
 def _document_candidates(row: dict[str, Any]) -> set[str]:
@@ -335,11 +354,97 @@ def _fetch_correo_rows(date_window: tuple[date, date] | None = None) -> list[dic
     return db.fetch_rows("jnc.notificacion_correo_certificado", existing_columns, where, params)
 
 
+def _fetch_guia_rows(date_window: tuple[date, date] | None = None) -> list[dict[str, Any]]:
+    columns = [
+        "id_guia_correo_fisico",
+        "id_archivo",
+        "hoja_origen",
+        "guia",
+        "estado",
+        "fec_entrega",
+        "fecha_entrega",
+        "ced_destinatario",
+        "ced_destinatario_normalizada",
+        "numero_documento",
+        "cartaporte",
+        "des_estadog",
+    ]
+    try:
+        table_columns = db.get_table_columns("jnc.guia_correo_fisico")
+    except ValueError:
+        return []
+
+    existing_columns = [column for column in columns if column in table_columns]
+    if not existing_columns:
+        return []
+
+    where = "1 = 1"
+    params: list[Any] = []
+    if date_window:
+        date_columns = [
+            column_name
+            for column_name in ("fec_entrega", "fecha_entrega")
+            if column_name in table_columns
+        ]
+        if date_columns:
+            start_date, end_date = date_window
+            where = " OR ".join(
+                f"([{column_name}] BETWEEN ? AND ?)"
+                for column_name in date_columns
+            )
+            params = [
+                value
+                for _ in date_columns
+                for value in (start_date, end_date)
+            ]
+
+    return db.fetch_rows("jnc.guia_correo_fisico", existing_columns, where, params)
+
+
 def _build_correo_index(correo_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     index: dict[str, list[dict[str, Any]]] = {}
     for row in correo_rows:
         for document in _document_candidates(row):
             index.setdefault(document, []).append(row)
+    return index
+
+
+def _guia_estado_entregado(row: dict[str, Any]) -> bool:
+    estado = _normalize_match_text(row.get("estado") or row.get("des_estadog"))
+    return "entregad" in estado
+
+
+def _guia_number(row: dict[str, Any]) -> str | None:
+    for field_name in ("guia", "cartaporte", "numero_guia", "correo_o_guia"):
+        guide_key = _right_digits(row.get(field_name))
+        if guide_key:
+            return guide_key
+
+    return None
+
+
+def _guia_delivery_date(row: dict[str, Any]) -> date | None:
+    return _parse_date(row.get("fec_entrega") or row.get("fecha_entrega"))
+
+
+def _guia_document(row: dict[str, Any]) -> str:
+    return normalize_document(
+        row.get("ced_destinatario_normalizada")
+        or row.get("ced_destinatario")
+        or row.get("numero_documento")
+    )
+
+
+def _build_guia_index(guia_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in guia_rows:
+        if not _guia_estado_entregado(row):
+            continue
+
+        guide_key = _guia_number(row)
+        if guide_key:
+            index.setdefault(guide_key, []).append(row)
+
     return index
 
 
@@ -543,6 +648,66 @@ def _score_candidate(
     }
 
 
+def _score_guia_candidate(
+    expected_row: dict[str, Any],
+    guia_row: dict[str, Any],
+) -> dict[str, Any]:
+    expected_document = normalize_document(
+        expected_row.get("cedula_normalizada") or expected_row.get("cedula")
+    )
+    expected_guide_key = _right_digits(expected_row.get("correo_o_guia_reportado"))
+    guia_key = _guia_number(guia_row)
+    guia_document = _guia_document(guia_row)
+    reference_date = _expected_reference_date(expected_row)
+    delivery_date = _guia_delivery_date(guia_row)
+    days_after_reference = (
+        (delivery_date - reference_date).days
+        if reference_date is not None and delivery_date is not None
+        else None
+    )
+    guia_ok = bool(expected_guide_key and expected_guide_key == guia_key)
+    document_ok = bool(expected_document and expected_document == guia_document)
+    date_in_window = (
+        days_after_reference is not None
+        and 0 <= days_after_reference <= GUIA_FECHA_VENTANA_DIAS
+    )
+    plazo_ok = (
+        days_after_reference is not None
+        and 0 <= days_after_reference <= PLAZO_DIAS_CALENDARIO
+    )
+    fuera_de_plazo = (
+        days_after_reference is not None
+        and PLAZO_DIAS_CALENDARIO < days_after_reference <= GUIA_FECHA_VENTANA_DIAS
+    )
+    estado_entregado = _guia_estado_entregado(guia_row)
+    checks = {
+        "cumple_guia": guia_ok,
+        "cumple_documento": document_ok,
+        "cumple_evento": estado_entregado,
+        "cumple_correo": guia_ok,
+        "cumple_plazo": plazo_ok,
+        "guia_fecha_en_ventana": date_in_window,
+        "guia_fuera_de_plazo": fuera_de_plazo,
+    }
+
+    return {
+        **checks,
+        "score_total": sum(1 for value in checks.values() if value),
+        "guia_esperada": expected_guide_key,
+        "guia_fisica": guia_key,
+        "cedula_esperada": expected_document,
+        "cedula_guia": guia_document,
+        "estado_guia": guia_row.get("estado") or guia_row.get("des_estadog"),
+        "fecha_referencia": normalize_date(reference_date),
+        "fecha_entrega_guia": normalize_date(delivery_date),
+        "dias_despues_referencia": days_after_reference,
+        "id_archivo_guia": guia_row.get("id_archivo"),
+        "id_guia_correo_fisico": guia_row.get("id_guia_correo_fisico"),
+        "hoja_origen_guia": guia_row.get("hoja_origen"),
+        "guia_row": guia_row,
+    }
+
+
 def _status_from_candidate(candidate: dict[str, Any] | None, has_document_candidates: bool) -> tuple[str, str]:
     if candidate is None:
         if has_document_candidates:
@@ -583,6 +748,40 @@ def _status_from_candidate(candidate: dict[str, Any] | None, has_document_candid
     return ESTADO_REQUIERE_REVISION, "La evidencia encontrada requiere revision manual"
 
 
+def _status_from_guia_candidate(
+    guia_candidate: dict[str, Any] | None,
+    has_guide_number: bool,
+) -> tuple[str | None, str | None]:
+    if not has_guide_number:
+        return None, None
+
+    if guia_candidate is None:
+        return ESTADO_GUIA_NO_COINCIDE, (
+            "No se encontro guia entregada que coincida por los ultimos 9 digitos "
+            "y fecha de entrega dentro de los 7 dias posteriores"
+        )
+
+    if not guia_candidate.get("guia_fecha_en_ventana"):
+        return ESTADO_GUIA_NO_COINCIDE, (
+            "La guia existe, pero la fecha de entrega no cae dentro de los 7 dias posteriores"
+        )
+
+    if not guia_candidate.get("cumple_documento"):
+        return ESTADO_GUIA_NO_COINCIDE_CEDULA, (
+            "La guia y fecha coinciden, pero la cedula digitalizada no coincide"
+        )
+
+    if guia_candidate.get("cumple_plazo"):
+        return ESTADO_CUMPLE, "Notificacion validada contra guia de correo fisico"
+
+    if guia_candidate.get("guia_fuera_de_plazo"):
+        return ESTADO_FUERA_DE_PLAZO, (
+            "La guia fue entregada entre 3 y 7 dias despues de la fecha de referencia"
+        )
+
+    return ESTADO_GUIA_NO_COINCIDE, "La guia no cumple los criterios de validacion"
+
+
 def _best_candidate(
     expected_row: dict[str, Any],
     correo_index: dict[str, list[dict[str, Any]]],
@@ -614,16 +813,96 @@ def _best_candidate(
     return scored_candidates[0], True
 
 
+def _best_guia_candidate(
+    expected_row: dict[str, Any],
+    guia_index: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, bool]:
+    expected_guide_key = _right_digits(expected_row.get("correo_o_guia_reportado"))
+    if not expected_guide_key:
+        return None, False
+
+    candidates = guia_index.get(expected_guide_key, [])
+    if not candidates:
+        return None, True
+
+    scored_candidates = [_score_guia_candidate(expected_row, row) for row in candidates]
+    scored_candidates.sort(
+        key=lambda item: (
+            item["guia_fecha_en_ventana"],
+            item["cumple_documento"],
+            item["cumple_plazo"],
+            item["guia_fuera_de_plazo"],
+            item["score_total"],
+        ),
+        reverse=True,
+    )
+    return scored_candidates[0], True
+
+
 def _build_revision_rows(
     expected_row: dict[str, Any],
     candidate: dict[str, Any] | None,
     has_document_candidates: bool,
+    guia_candidate: dict[str, Any] | None = None,
+    has_guide_number: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    status, pending_detail = _status_from_candidate(candidate, has_document_candidates)
+    correo_status, correo_pending_detail = _status_from_candidate(
+        candidate,
+        has_document_candidates,
+    )
+    guia_status, guia_pending_detail = _status_from_guia_candidate(
+        guia_candidate,
+        has_guide_number,
+    )
+    use_guia = bool(has_guide_number and correo_status != ESTADO_CUMPLE and guia_status)
+    status = guia_status if use_guia else correo_status
+    pending_detail = guia_pending_detail if use_guia else correo_pending_detail
+    fuente_revision = "GUIA_CORREO_FISICO" if use_guia else "CORREO_CERTIFICADO"
     correo_row = candidate.get("correo_row") if candidate else None
     revision_date = utc_now_iso()
+    cumple_documento = (
+        guia_candidate.get("cumple_documento")
+        if use_guia and guia_candidate
+        else candidate.get("cumple_documento") if candidate else False
+    )
+    cumple_evento = (
+        guia_candidate.get("cumple_evento")
+        if use_guia and guia_candidate
+        else candidate.get("cumple_evento") if candidate else False
+    )
+    cumple_correo = (
+        guia_candidate.get("cumple_correo")
+        if use_guia and guia_candidate
+        else candidate.get("cumple_correo") if candidate else False
+    )
+    cumple_plazo = (
+        guia_candidate.get("cumple_plazo")
+        if use_guia and guia_candidate
+        else candidate.get("cumple_plazo") if candidate else False
+    )
+    score_total = (
+        guia_candidate.get("score_total")
+        if use_guia and guia_candidate
+        else candidate.get("score_total") if candidate else None
+    )
+    fecha_referencia = (
+        guia_candidate.get("fecha_referencia")
+        if use_guia and guia_candidate
+        else candidate.get("fecha_audiencia") if candidate else None
+    )
+    fecha_evidencia = (
+        guia_candidate.get("fecha_entrega_guia")
+        if use_guia and guia_candidate
+        else candidate.get("fecha_envio_certificado") if candidate else None
+    )
+    dias_despues_referencia = (
+        guia_candidate.get("dias_despues_referencia")
+        if use_guia and guia_candidate
+        else candidate.get("dias_despues_audiencia") if candidate else None
+    )
 
     detail = {
+        "fuente_revision": fuente_revision,
         "estado_revision_notificacion": status,
         "pendiente_revision": pending_detail,
         "numero_radicado_normalizado": expected_row.get("numero_radicado_normalizado"),
@@ -637,14 +916,26 @@ def _build_revision_rows(
         else None,
         "numero_linea_csv_match": correo_row.get("numero_linea_csv") if correo_row else None,
         "checks": {
-            key: candidate.get(key) if candidate else False
-            for key in (
-                "cumple_documento",
-                "cumple_asunto",
-                "cumple_evento",
-                "cumple_correo",
-                "cumple_plazo",
-            )
+            "cumple_documento": bool(cumple_documento),
+            "cumple_asunto": bool(candidate.get("cumple_asunto")) if candidate else False,
+            "cumple_evento": bool(cumple_evento),
+            "cumple_correo": bool(cumple_correo),
+            "cumple_plazo": bool(cumple_plazo),
+        },
+        "guia_fisica": {
+            "aplica": has_guide_number,
+            "estado_revision_notificacion": guia_status,
+            "guia_esperada": guia_candidate.get("guia_esperada") if guia_candidate else _right_digits(expected_row.get("correo_o_guia_reportado")),
+            "guia_fisica": guia_candidate.get("guia_fisica") if guia_candidate else None,
+            "cedula_esperada": guia_candidate.get("cedula_esperada") if guia_candidate else normalize_document(expected_row.get("cedula_normalizada") or expected_row.get("cedula")),
+            "cedula_guia": guia_candidate.get("cedula_guia") if guia_candidate else None,
+            "estado_guia": guia_candidate.get("estado_guia") if guia_candidate else None,
+            "fecha_referencia": guia_candidate.get("fecha_referencia") if guia_candidate else normalize_date(_expected_reference_date(expected_row)),
+            "fecha_entrega_guia": guia_candidate.get("fecha_entrega_guia") if guia_candidate else None,
+            "dias_despues_referencia": guia_candidate.get("dias_despues_referencia") if guia_candidate else None,
+            "id_archivo_guia": guia_candidate.get("id_archivo_guia") if guia_candidate else None,
+            "id_guia_correo_fisico": guia_candidate.get("id_guia_correo_fisico") if guia_candidate else None,
+            "hoja_origen_guia": guia_candidate.get("hoja_origen_guia") if guia_candidate else None,
         },
         "score_asunto": candidate.get("score_asunto") if candidate else None,
         "score_evento": candidate.get("score_evento") if candidate else None,
@@ -656,9 +947,9 @@ def _build_revision_rows(
         "correo_certificado": candidate.get("correo_certificado") if candidate else None,
         "tipo_match_correo": candidate.get("tipo_match_correo") if candidate else None,
         "distancia_correo": candidate.get("distancia_correo") if candidate else None,
-        "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
-        "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
-        "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
+        "fecha_audiencia": fecha_referencia,
+        "fecha_envio_certificado": fecha_evidencia,
+        "dias_despues_audiencia": dias_despues_referencia,
     }
     detail_json = json_dumps_safe(detail)
 
@@ -691,24 +982,30 @@ def _build_revision_rows(
         "numero_linea_csv_match": correo_row.get("numero_linea_csv") if correo_row else None,
         "estado_revision_notificacion": status,
         "descripcion_revision": pending_detail,
-        "cumple_documento": 1 if candidate and candidate.get("cumple_documento") else 0,
+        "cumple_documento": 1 if cumple_documento else 0,
         "cumple_asunto": 1 if candidate and candidate.get("cumple_asunto") else 0,
-        "cumple_evento": 1 if candidate and candidate.get("cumple_evento") else 0,
-        "cumple_correo": 1 if candidate and candidate.get("cumple_correo") else 0,
-        "cumple_plazo": 1 if candidate and candidate.get("cumple_plazo") else 0,
-        "score_total": candidate.get("score_total") if candidate else None,
+        "cumple_evento": 1 if cumple_evento else 0,
+        "cumple_correo": 1 if cumple_correo else 0,
+        "cumple_plazo": 1 if cumple_plazo else 0,
+        "score_total": score_total,
         "score_asunto": candidate.get("score_asunto") if candidate else None,
         "score_evento": candidate.get("score_evento") if candidate else None,
         "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
         "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
         "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
-        "tipo_match_correo": candidate.get("tipo_match_correo") if candidate else None,
+        "tipo_match_correo": "GUIA_ULTIMOS_9_DIGITOS"
+        if use_guia and guia_candidate and guia_candidate.get("cumple_guia")
+        else candidate.get("tipo_match_correo") if candidate else None,
         "distancia_correo": candidate.get("distancia_correo") if candidate else None,
-        "correo_esperado": candidate.get("correo_esperado") if candidate else None,
-        "correo_certificado": candidate.get("correo_certificado") if candidate else None,
-        "fecha_audiencia": candidate.get("fecha_audiencia") if candidate else None,
-        "fecha_envio_certificado": candidate.get("fecha_envio_certificado") if candidate else None,
-        "dias_despues_audiencia": candidate.get("dias_despues_audiencia") if candidate else None,
+        "correo_esperado": guia_candidate.get("guia_esperada")
+        if use_guia and guia_candidate
+        else candidate.get("correo_esperado") if candidate else None,
+        "correo_certificado": guia_candidate.get("guia_fisica")
+        if use_guia and guia_candidate
+        else candidate.get("correo_certificado") if candidate else None,
+        "fecha_audiencia": fecha_referencia,
+        "fecha_envio_certificado": fecha_evidencia,
+        "dias_despues_audiencia": dias_despues_referencia,
         "fecha_revision": revision_date,
         "version_regla_cruce": CRUCE_VERSION,
         "detalle_revision_json": detail_json,
@@ -798,6 +1095,8 @@ def recalcular_cruce_notificaciones(
     date_window = _correo_date_window(expected_rows)
     correo_rows = _fetch_correo_rows(date_window)
     correo_index = _build_correo_index(correo_rows)
+    guia_rows = _fetch_guia_rows(date_window)
+    guia_index = _build_guia_index(guia_rows)
 
     updates = []
     cruce_rows = []
@@ -815,9 +1114,13 @@ def recalcular_cruce_notificaciones(
         else None,
         "notificaciones_actualizadas": 0,
         "correos_evaluados": len(correo_rows),
+        "guias_evaluadas": len(guia_rows),
+        "guias_entregadas_indexadas": sum(len(rows) for rows in guia_index.values()),
         "ventana_correo_desde": date_window[0].isoformat() if date_window else None,
         "ventana_correo_hasta": date_window[1].isoformat() if date_window else None,
         "cumplen": 0,
+        "cumplen_por_guia_fisica": 0,
+        "fuera_de_plazo_por_guia_fisica": 0,
         "pendientes": 0,
         "sin_correo_certificado": 0,
         "cruces_eliminados": 0,
@@ -834,16 +1137,25 @@ def recalcular_cruce_notificaciones(
 
     for expected_row in expected_rows:
         candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
+        guia_candidate, has_guide_number = _best_guia_candidate(expected_row, guia_index)
         update_row, cruce_row = _build_revision_rows(
             expected_row,
             candidate,
             has_document_candidates,
+            guia_candidate,
+            has_guide_number,
         )
         updates.append(update_row)
         cruce_rows.append(cruce_row)
 
         status = update_row["estado_revision_notificacion"]
         status_by_expected_id[expected_row.get("id_notificacion_esperada")] = status
+        detail = json.loads(update_row["detalle_revision_json"])
+        if detail.get("fuente_revision") == "GUIA_CORREO_FISICO":
+            if status == ESTADO_CUMPLE:
+                summary["cumplen_por_guia_fisica"] += 1
+            elif status == ESTADO_FUERA_DE_PLAZO:
+                summary["fuera_de_plazo_por_guia_fisica"] += 1
 
         if status == ESTADO_CUMPLE:
             summary["cumplen"] += 1
