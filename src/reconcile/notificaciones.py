@@ -223,7 +223,12 @@ def _days_between(start_value: Any, end_value: Any) -> int | None:
     return (end_date - start_date).days
 
 
-def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
+def _fetch_expected_rows(
+    id_archivo_salas: int | None,
+    batch_size: int | None = None,
+    after_id_notificacion_esperada: int | None = None,
+    solo_pendientes_filter: bool = False,
+) -> list[dict[str, Any]]:
     base_columns = [
         "id_notificacion_esperada",
         "id_archivo",
@@ -255,6 +260,18 @@ def _fetch_expected_rows(id_archivo_salas: int | None) -> list[dict[str, Any]]:
     if id_archivo_salas is not None:
         where += " AND [id_archivo] = ?"
         params.append(id_archivo_salas)
+    if after_id_notificacion_esperada is not None:
+        where += " AND [id_notificacion_esperada] > ?"
+        params.append(after_id_notificacion_esperada)
+    if solo_pendientes_filter and "estado_revision_notificacion" in table_columns:
+        where += " AND COALESCE([estado_revision_notificacion], 'SIN_REVISION') <> ?"
+        params.append(ESTADO_CUMPLE)
+
+    if batch_size is not None:
+        where += " ORDER BY [id_notificacion_esperada] OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
+        params.append(batch_size)
+    elif after_id_notificacion_esperada is not None:
+        where += " ORDER BY [id_notificacion_esperada]"
 
     return db.fetch_rows("jnc.notificacion_esperada", columns, where, params)
 
@@ -1077,8 +1094,26 @@ def _radicado_extemporaneo_por_campos(field_statuses: dict[str, list[str]]) -> b
 def recalcular_cruce_notificaciones(
     id_archivo_salas: int | None = None,
     solo_pendientes: bool = True,
+    batch_size: int | None = None,
+    after_id_notificacion_esperada: int | None = None,
+    refrescar_resumen: bool = True,
 ) -> dict[str, Any]:
-    all_expected_rows = _fetch_expected_rows(id_archivo_salas)
+    chunked_run = batch_size is not None or after_id_notificacion_esperada is not None
+    fetched_expected_rows = _fetch_expected_rows(
+        id_archivo_salas,
+        batch_size=batch_size,
+        after_id_notificacion_esperada=after_id_notificacion_esperada,
+        solo_pendientes_filter=chunked_run and solo_pendientes,
+    )
+    fetched_last_id = max(
+        (
+            row.get("id_notificacion_esperada")
+            for row in fetched_expected_rows
+            if row.get("id_notificacion_esperada") is not None
+        ),
+        default=None,
+    )
+    all_expected_rows = fetched_expected_rows
     latest_audiencia_caso_date = _fetch_latest_audiencia_caso_date()
     all_expected_rows, raw_skipped_by_date = _filter_raw_by_latest_audiencia_date(
         all_expected_rows,
@@ -1108,6 +1143,21 @@ def recalcular_cruce_notificaciones(
     }
     summary = {
         "notificaciones_evaluadas": len(expected_rows),
+        "notificaciones_leidas": len(fetched_expected_rows),
+        "batch_size": batch_size,
+        "after_id_notificacion_esperada": after_id_notificacion_esperada,
+        "ultimo_id_notificacion_esperada": max(
+            (
+                row.get("id_notificacion_esperada")
+                for row in expected_rows
+                if row.get("id_notificacion_esperada") is not None
+            ),
+            default=None,
+        ),
+        "ultimo_id_leido": fetched_last_id,
+        "next_cursor": None,
+        "chunked_run": chunked_run,
+        "refrescar_resumen": refrescar_resumen,
         "raw_omitidas_por_fecha_audiencia": raw_skipped_by_date,
         "fecha_audiencia_caso_maxima": latest_audiencia_caso_date.isoformat()
         if latest_audiencia_caso_date
@@ -1134,6 +1184,8 @@ def recalcular_cruce_notificaciones(
         "porcentaje_radicados_validados_extemporaneos": 0.0,
         "resumen_validacion_radicado": {},
     }
+    if batch_size is not None and summary["notificaciones_leidas"] >= batch_size:
+        summary["next_cursor"] = summary["ultimo_id_leido"]
 
     for expected_row in expected_rows:
         candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
@@ -1203,7 +1255,13 @@ def recalcular_cruce_notificaciones(
         )
 
     if cruce_rows:
-        if not solo_pendientes and id_archivo_salas is not None:
+        if chunked_run:
+            summary["cruces_eliminados"] = db.delete_by_column_values(
+                "jnc.resultado_cruce_notificacion",
+                "id_notificacion_esperada",
+                [row.get("id_notificacion_esperada") for row in cruce_rows],
+            )
+        elif not solo_pendientes and id_archivo_salas is not None:
             summary["cruces_eliminados"] = db.delete_by_archivo(
                 "jnc.resultado_cruce_notificacion",
                 id_archivo_salas,
@@ -1223,7 +1281,7 @@ def recalcular_cruce_notificaciones(
             "jnc.resultado_cruce_notificacion",
             cruce_rows,
         )
-    elif not solo_pendientes and id_archivo_salas is not None:
+    elif not chunked_run and not solo_pendientes and id_archivo_salas is not None:
         summary["cruces_eliminados"] = db.delete_by_archivo(
             "jnc.resultado_cruce_notificacion",
             id_archivo_salas,
@@ -1234,5 +1292,6 @@ def recalcular_cruce_notificaciones(
         "id_notificacion_esperada",
         updates,
     )
-    summary["resumen_validacion_radicado"] = refrescar_resumen_validacion_radicado()
+    if refrescar_resumen:
+        summary["resumen_validacion_radicado"] = refrescar_resumen_validacion_radicado()
     return summary

@@ -81,6 +81,13 @@ def parse_optional_int(payload: dict[str, Any], field_name: str) -> int | None:
         raise ValueError(f"{field_name} debe ser numerico") from exc
 
 
+def parse_optional_positive_int(payload: dict[str, Any], field_name: str) -> int | None:
+    value = parse_optional_int(payload, field_name)
+    if value is not None and value <= 0:
+        raise ValueError(f"{field_name} debe ser mayor que cero")
+    return value
+
+
 def parse_bool(payload: dict[str, Any], field_name: str, default: bool) -> bool:
     raw_value = payload.get(field_name, default)
     if isinstance(raw_value, bool):
@@ -281,11 +288,29 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
         payload = get_optional_request_payload(req)
         id_archivo_salas = parse_optional_int(payload, "id_archivo_salas")
         solo_pendientes = parse_bool(payload, "solo_pendientes", False)
+        batch_size = parse_optional_positive_int(payload, "batch_size")
+        after_id_notificacion_esperada = parse_optional_int(
+            payload,
+            "after_id_notificacion_esperada",
+        )
+        if (
+            after_id_notificacion_esperada is not None
+            and after_id_notificacion_esperada < 0
+        ):
+            raise ValueError("after_id_notificacion_esperada no puede ser negativo")
+        refrescar_resumen = parse_bool(
+            payload,
+            "refrescar_resumen",
+            batch_size is None,
+        )
 
         summary = db.run_in_transaction(
             lambda: recalcular_cruce_notificaciones(
                 id_archivo_salas=id_archivo_salas,
                 solo_pendientes=solo_pendientes,
+                batch_size=batch_size,
+                after_id_notificacion_esperada=after_id_notificacion_esperada,
+                refrescar_resumen=refrescar_resumen,
             )
         )
         return build_json_response(
@@ -293,6 +318,9 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 "status": "OK",
                 "id_archivo_salas": id_archivo_salas,
                 "solo_pendientes": solo_pendientes,
+                "batch_size": batch_size,
+                "after_id_notificacion_esperada": after_id_notificacion_esperada,
+                "refrescar_resumen": refrescar_resumen,
                 "cruce_notificaciones": summary,
             },
             status_code=200,
