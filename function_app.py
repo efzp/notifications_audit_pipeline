@@ -17,6 +17,7 @@ from src.load.write_audiencias import write_audiencias_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_guias import write_guias_result_to_sql
 from src.load.write_salas import write_salas_result_to_sql
+from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -42,6 +43,18 @@ def get_request_payload(req: func.HttpRequest) -> dict[str, Any]:
     return payload
 
 
+def get_optional_request_payload(req: func.HttpRequest) -> dict[str, Any]:
+    try:
+        raw_body = req.get_body()
+    except Exception:
+        raw_body = b""
+
+    if not raw_body:
+        return {}
+
+    return get_request_payload(req)
+
+
 def get_id_archivo(payload: dict[str, Any]) -> int:
     raw_id = payload.get("id_archivo")
     if raw_id in (None, ""):
@@ -55,6 +68,33 @@ def get_id_archivo(payload: dict[str, Any]) -> int:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def parse_optional_int(payload: dict[str, Any], field_name: str) -> int | None:
+    raw_value = payload.get(field_name)
+    if raw_value in (None, ""):
+        return None
+
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} debe ser numerico") from exc
+
+
+def parse_bool(payload: dict[str, Any], field_name: str, default: bool) -> bool:
+    raw_value = payload.get(field_name, default)
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, int) and raw_value in (0, 1):
+        return bool(raw_value)
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in {"1", "true", "si", "sí", "yes"}:
+            return True
+        if normalized in {"0", "false", "no"}:
+            return False
+
+    raise ValueError(f"{field_name} debe ser booleano")
 
 
 def compute_payload_file_hash(payload: dict[str, Any]) -> str | None:
@@ -234,6 +274,41 @@ def handle_read_processing(
         )
 
 
+def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("recalcular_cruce_notificaciones ejecutada")
+
+    try:
+        payload = get_optional_request_payload(req)
+        id_archivo_salas = parse_optional_int(payload, "id_archivo_salas")
+        solo_pendientes = parse_bool(payload, "solo_pendientes", False)
+
+        summary = db.run_in_transaction(
+            lambda: recalcular_cruce_notificaciones(
+                id_archivo_salas=id_archivo_salas,
+                solo_pendientes=solo_pendientes,
+            )
+        )
+        return build_json_response(
+            {
+                "status": "OK",
+                "id_archivo_salas": id_archivo_salas,
+                "solo_pendientes": solo_pendientes,
+                "cruce_notificaciones": summary,
+            },
+            status_code=200,
+        )
+    except Exception as exc:
+        logging.exception("Error recalculando cruce_notificaciones")
+        return build_json_response(
+            {
+                "status": "ERROR_PROCESAMIENTO",
+                "errores": 1,
+                "mensaje": str(exc),
+            },
+            status_code=500,
+        )
+
+
 @app.route(route="procesar_input_salas", methods=["POST"])
 def procesar_input_salas(req: func.HttpRequest) -> func.HttpResponse:
     return handle_sql_processing(
@@ -272,3 +347,8 @@ def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
         procesador_guias.process_payload_data,
         write_guias_result_to_sql,
     )
+
+
+@app.route(route="recalcular_cruce_notificaciones", methods=["POST"])
+def recalcular_cruce_notificaciones_route(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_recalcular_cruce_notificaciones(req)
