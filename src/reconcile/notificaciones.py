@@ -467,11 +467,16 @@ def _guia_delivery_date(row: dict[str, Any]) -> date | None:
 
 
 def _guia_document(row: dict[str, Any]) -> str:
-    return normalize_document(
-        row.get("ced_destinatario_normalizada")
-        or row.get("ced_destinatario")
-        or row.get("numero_documento")
-    )
+    for field_name in (
+        "ced_destinatario_normalizada",
+        "ced_destinatario",
+        "numero_documento",
+    ):
+        document = normalize_document(row.get(field_name))
+        if document and document != "0":
+            return document
+
+    return ""
 
 
 def _build_guia_index(guia_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
