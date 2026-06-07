@@ -34,6 +34,7 @@ MAX_EMAIL_LOCAL_PART_DISTANCE = 2
 CRUCE_VERSION = "1.0"
 CORREO_FECHA_VENTANA_DIAS = 7
 GUIA_MATCH_DIGITS = 9
+GUIA_ENVIA_MATCH_THRESHOLD = 0.8
 
 
 def utc_now_iso() -> str:
@@ -162,6 +163,27 @@ def _right_digits(value: Any, length: int = GUIA_MATCH_DIGITS) -> str | None:
         return None
 
     return digits[-length:]
+
+
+def _looks_like_envia(value: Any) -> bool:
+    tokens = _tokens(value)
+    if not tokens:
+        return False
+
+    expected_words = ("envia", "envio", "enviado", "enviar")
+    return any(
+        SequenceMatcher(None, token, expected).ratio() >= GUIA_ENVIA_MATCH_THRESHOLD
+        for token in tokens
+        for expected in expected_words
+    )
+
+
+def _guia_lookup_method(expected_row: dict[str, Any]) -> str | None:
+    if _right_digits(expected_row.get("correo_o_guia_reportado")):
+        return "GUIA_ULTIMOS_9_DIGITOS"
+    if _looks_like_envia(expected_row.get("correo_o_guia_reportado")):
+        return "GUIA_CEDULA_FECHA_ENVIA"
+    return None
 
 
 def _document_candidates(row: dict[str, Any]) -> set[str]:
@@ -465,6 +487,19 @@ def _build_guia_index(guia_rows: list[dict[str, Any]]) -> dict[str, list[dict[st
     return index
 
 
+def _build_guia_document_index(guia_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in guia_rows:
+        if not _guia_estado_entregado(row):
+            continue
+
+        document = _guia_document(row)
+        if document:
+            index.setdefault(document, []).append(row)
+
+    return index
+
+
 def _correo_date(row: dict[str, Any]) -> Any:
     return row.get("fecha") or row.get("fecha_2") or row.get("fecha_3")
 
@@ -668,6 +703,7 @@ def _score_candidate(
 def _score_guia_candidate(
     expected_row: dict[str, Any],
     guia_row: dict[str, Any],
+    metodo_busqueda: str = "GUIA_ULTIMOS_9_DIGITOS",
 ) -> dict[str, Any]:
     expected_document = normalize_document(
         expected_row.get("cedula_normalizada") or expected_row.get("cedula")
@@ -682,7 +718,6 @@ def _score_guia_candidate(
         if reference_date is not None and delivery_date is not None
         else None
     )
-    guia_ok = bool(expected_guide_key and expected_guide_key == guia_key)
     document_ok = bool(expected_document and expected_document == guia_document)
     date_in_window = (
         days_after_reference is not None
@@ -697,6 +732,11 @@ def _score_guia_candidate(
         and PLAZO_DIAS_CALENDARIO < days_after_reference <= GUIA_FECHA_VENTANA_DIAS
     )
     estado_entregado = _guia_estado_entregado(guia_row)
+    guia_ok = (
+        bool(expected_guide_key and expected_guide_key == guia_key)
+        if metodo_busqueda == "GUIA_ULTIMOS_9_DIGITOS"
+        else bool(document_ok and date_in_window and estado_entregado)
+    )
     checks = {
         "cumple_guia": guia_ok,
         "cumple_documento": document_ok,
@@ -712,6 +752,7 @@ def _score_guia_candidate(
         "score_total": sum(1 for value in checks.values() if value),
         "guia_esperada": expected_guide_key,
         "guia_fisica": guia_key,
+        "metodo_busqueda": metodo_busqueda,
         "cedula_esperada": expected_document,
         "cedula_guia": guia_document,
         "estado_guia": guia_row.get("estado") or guia_row.get("des_estadog"),
@@ -767,14 +808,14 @@ def _status_from_candidate(candidate: dict[str, Any] | None, has_document_candid
 
 def _status_from_guia_candidate(
     guia_candidate: dict[str, Any] | None,
-    has_guide_number: bool,
+    has_guia_lookup: bool,
 ) -> tuple[str | None, str | None]:
-    if not has_guide_number:
+    if not has_guia_lookup:
         return None, None
 
     if guia_candidate is None:
         return ESTADO_GUIA_NO_COINCIDE, (
-            "No se encontro guia entregada que coincida por los ultimos 9 digitos "
+            "No se encontro guia entregada que coincida por numero de guia o por cedula "
             "y fecha de entrega dentro de los 7 dias posteriores"
         )
 
@@ -789,6 +830,10 @@ def _status_from_guia_candidate(
         )
 
     if guia_candidate.get("cumple_plazo"):
+        if guia_candidate.get("metodo_busqueda") == "GUIA_CEDULA_FECHA_ENVIA":
+            return ESTADO_CUMPLE, (
+                "Notificacion validada contra guia de correo fisico por cedula y fecha"
+            )
         return ESTADO_CUMPLE, "Notificacion validada contra guia de correo fisico"
 
     if guia_candidate.get("guia_fuera_de_plazo"):
@@ -833,16 +878,29 @@ def _best_candidate(
 def _best_guia_candidate(
     expected_row: dict[str, Any],
     guia_index: dict[str, list[dict[str, Any]]],
+    guia_document_index: dict[str, list[dict[str, Any]]],
 ) -> tuple[dict[str, Any] | None, bool]:
     expected_guide_key = _right_digits(expected_row.get("correo_o_guia_reportado"))
-    if not expected_guide_key:
+    metodo_busqueda = _guia_lookup_method(expected_row)
+    if expected_guide_key:
+        candidates = guia_index.get(expected_guide_key, [])
+    elif metodo_busqueda == "GUIA_CEDULA_FECHA_ENVIA":
+        expected_document = normalize_document(
+            expected_row.get("cedula_normalizada") or expected_row.get("cedula")
+        )
+        if not expected_document:
+            return None, False
+        candidates = guia_document_index.get(expected_document, [])
+    else:
         return None, False
 
-    candidates = guia_index.get(expected_guide_key, [])
     if not candidates:
         return None, True
 
-    scored_candidates = [_score_guia_candidate(expected_row, row) for row in candidates]
+    scored_candidates = [
+        _score_guia_candidate(expected_row, row, metodo_busqueda)
+        for row in candidates
+    ]
     scored_candidates.sort(
         key=lambda item: (
             item["guia_fecha_en_ventana"],
@@ -861,7 +919,7 @@ def _build_revision_rows(
     candidate: dict[str, Any] | None,
     has_document_candidates: bool,
     guia_candidate: dict[str, Any] | None = None,
-    has_guide_number: bool = False,
+    has_guia_lookup: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     correo_status, correo_pending_detail = _status_from_candidate(
         candidate,
@@ -869,54 +927,85 @@ def _build_revision_rows(
     )
     guia_status, guia_pending_detail = _status_from_guia_candidate(
         guia_candidate,
-        has_guide_number,
+        has_guia_lookup,
     )
-    use_guia = bool(has_guide_number and correo_status != ESTADO_CUMPLE and guia_status)
+    use_guia = bool(has_guia_lookup and correo_status != ESTADO_CUMPLE and guia_status)
     status = guia_status if use_guia else correo_status
     pending_detail = guia_pending_detail if use_guia else correo_pending_detail
     fuente_revision = "GUIA_CORREO_FISICO" if use_guia else "CORREO_CERTIFICADO"
+    guia_lookup_method = (
+        guia_candidate.get("metodo_busqueda")
+        if guia_candidate
+        else _guia_lookup_method(expected_row) if has_guia_lookup else None
+    )
     correo_row = candidate.get("correo_row") if candidate else None
     revision_date = utc_now_iso()
     cumple_documento = (
-        guia_candidate.get("cumple_documento")
-        if use_guia and guia_candidate
-        else candidate.get("cumple_documento") if candidate else False
-    )
+        guia_candidate.get("cumple_documento") if guia_candidate else False
+    ) if use_guia else candidate.get("cumple_documento") if candidate else False
     cumple_evento = (
-        guia_candidate.get("cumple_evento")
-        if use_guia and guia_candidate
-        else candidate.get("cumple_evento") if candidate else False
-    )
+        guia_candidate.get("cumple_evento") if guia_candidate else False
+    ) if use_guia else candidate.get("cumple_evento") if candidate else False
     cumple_correo = (
-        guia_candidate.get("cumple_correo")
-        if use_guia and guia_candidate
-        else candidate.get("cumple_correo") if candidate else False
-    )
+        guia_candidate.get("cumple_correo") if guia_candidate else False
+    ) if use_guia else candidate.get("cumple_correo") if candidate else False
     cumple_plazo = (
-        guia_candidate.get("cumple_plazo")
-        if use_guia and guia_candidate
-        else candidate.get("cumple_plazo") if candidate else False
-    )
+        guia_candidate.get("cumple_plazo") if guia_candidate else False
+    ) if use_guia else candidate.get("cumple_plazo") if candidate else False
+    cumple_asunto = False if use_guia else candidate.get("cumple_asunto") if candidate else False
     score_total = (
-        guia_candidate.get("score_total")
-        if use_guia and guia_candidate
-        else candidate.get("score_total") if candidate else None
-    )
+        guia_candidate.get("score_total") if guia_candidate else 0
+    ) if use_guia else candidate.get("score_total") if candidate else None
     fecha_referencia = (
         guia_candidate.get("fecha_referencia")
-        if use_guia and guia_candidate
-        else candidate.get("fecha_audiencia") if candidate else None
-    )
+        if guia_candidate
+        else normalize_date(_expected_reference_date(expected_row))
+    ) if use_guia else candidate.get("fecha_audiencia") if candidate else None
     fecha_evidencia = (
-        guia_candidate.get("fecha_entrega_guia")
-        if use_guia and guia_candidate
-        else candidate.get("fecha_envio_certificado") if candidate else None
-    )
+        guia_candidate.get("fecha_entrega_guia") if guia_candidate else None
+    ) if use_guia else candidate.get("fecha_envio_certificado") if candidate else None
     dias_despues_referencia = (
-        guia_candidate.get("dias_despues_referencia")
-        if use_guia and guia_candidate
-        else candidate.get("dias_despues_audiencia") if candidate else None
+        guia_candidate.get("dias_despues_referencia") if guia_candidate else None
+    ) if use_guia else candidate.get("dias_despues_audiencia") if candidate else None
+    fuente_documento_match = (
+        "GUIA_CEDULA_DESTINATARIO"
+        if use_guia and cumple_documento
+        else candidate.get("fuente_documento_match") if candidate else None
     )
+    asunto_tipo_match = None if use_guia else candidate.get("asunto_tipo_match") if candidate else None
+    evento_tipo_match = (
+        "ENTREGADO"
+        if use_guia and cumple_evento
+        else candidate.get("evento_tipo_match") if candidate else None
+    )
+    tipo_match_correo = (
+        guia_lookup_method
+        if use_guia and cumple_correo
+        else candidate.get("tipo_match_correo") if candidate else None
+    )
+    correo_esperado = (
+        guia_candidate.get("guia_esperada") or expected_row.get("correo_o_guia_reportado")
+        if use_guia and guia_candidate
+        else candidate.get("correo_esperado") if candidate else None
+    )
+    correo_certificado = (
+        guia_candidate.get("guia_fisica")
+        if use_guia and guia_candidate
+        else candidate.get("correo_certificado") if candidate else None
+    )
+    distancia_correo = None if use_guia else candidate.get("distancia_correo") if candidate else None
+    score_asunto = None if use_guia else candidate.get("score_asunto") if candidate else None
+    score_evento = None if use_guia else candidate.get("score_evento") if candidate else None
+    criterio_documento = (
+        "cedula_destinatario_guia"
+        if use_guia
+        else "cedula_en_asunto_o_adjuntos_correo"
+    )
+    criterio_evento = "estado_guia_entregado" if use_guia else "evento_correo_certificado"
+    criterio_canal = (
+        guia_lookup_method.lower() if use_guia and guia_lookup_method else "correo_destinatario"
+    )
+    criterio_plazo = "fecha_entrega_guia" if use_guia else "fecha_envio_certificado"
 
     detail = {
         "fuente_revision": fuente_revision,
@@ -934,14 +1023,39 @@ def _build_revision_rows(
         "numero_linea_csv_match": correo_row.get("numero_linea_csv") if correo_row else None,
         "checks": {
             "cumple_documento": bool(cumple_documento),
-            "cumple_asunto": bool(candidate.get("cumple_asunto")) if candidate else False,
+            "cumple_asunto": bool(cumple_asunto),
             "cumple_evento": bool(cumple_evento),
             "cumple_correo": bool(cumple_correo),
             "cumple_plazo": bool(cumple_plazo),
         },
+        "criterios_convergentes": {
+            "cumple_documento": {
+                "cumple": bool(cumple_documento),
+                "criterio": criterio_documento,
+                "fuente_match": fuente_documento_match,
+            },
+            "cumple_evento": {
+                "cumple": bool(cumple_evento),
+                "criterio": criterio_evento,
+                "tipo_match": evento_tipo_match,
+            },
+            "cumple_correo": {
+                "cumple": bool(cumple_correo),
+                "criterio": criterio_canal,
+                "tipo_match": tipo_match_correo,
+            },
+            "cumple_plazo": {
+                "cumple": bool(cumple_plazo),
+                "criterio": criterio_plazo,
+                "fecha_referencia": fecha_referencia,
+                "fecha_evidencia": fecha_evidencia,
+                "dias_despues_referencia": dias_despues_referencia,
+            },
+        },
         "guia_fisica": {
-            "aplica": has_guide_number,
+            "aplica": has_guia_lookup,
             "estado_revision_notificacion": guia_status,
+            "metodo_busqueda": guia_lookup_method,
             "guia_esperada": guia_candidate.get("guia_esperada") if guia_candidate else _right_digits(expected_row.get("correo_o_guia_reportado")),
             "guia_fisica": guia_candidate.get("guia_fisica") if guia_candidate else None,
             "cedula_esperada": guia_candidate.get("cedula_esperada") if guia_candidate else normalize_document(expected_row.get("cedula_normalizada") or expected_row.get("cedula")),
@@ -954,16 +1068,16 @@ def _build_revision_rows(
             "id_guia_correo_fisico": guia_candidate.get("id_guia_correo_fisico") if guia_candidate else None,
             "hoja_origen_guia": guia_candidate.get("hoja_origen_guia") if guia_candidate else None,
         },
-        "score_asunto": candidate.get("score_asunto") if candidate else None,
-        "score_evento": candidate.get("score_evento") if candidate else None,
-        "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
-        "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
-        "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
+        "score_asunto": score_asunto,
+        "score_evento": score_evento,
+        "fuente_documento_match": fuente_documento_match,
+        "asunto_tipo_match": asunto_tipo_match,
+        "evento_tipo_match": evento_tipo_match,
         "correos_esperados": candidate.get("correos_esperados") if candidate else [],
-        "correo_esperado": candidate.get("correo_esperado") if candidate else None,
-        "correo_certificado": candidate.get("correo_certificado") if candidate else None,
-        "tipo_match_correo": candidate.get("tipo_match_correo") if candidate else None,
-        "distancia_correo": candidate.get("distancia_correo") if candidate else None,
+        "correo_esperado": correo_esperado,
+        "correo_certificado": correo_certificado,
+        "tipo_match_correo": tipo_match_correo,
+        "distancia_correo": distancia_correo,
         "fecha_audiencia": fecha_referencia,
         "fecha_envio_certificado": fecha_evidencia,
         "dias_despues_audiencia": dias_despues_referencia,
@@ -1000,26 +1114,20 @@ def _build_revision_rows(
         "estado_revision_notificacion": status,
         "descripcion_revision": pending_detail,
         "cumple_documento": 1 if cumple_documento else 0,
-        "cumple_asunto": 1 if candidate and candidate.get("cumple_asunto") else 0,
+        "cumple_asunto": 1 if cumple_asunto else 0,
         "cumple_evento": 1 if cumple_evento else 0,
         "cumple_correo": 1 if cumple_correo else 0,
         "cumple_plazo": 1 if cumple_plazo else 0,
         "score_total": score_total,
-        "score_asunto": candidate.get("score_asunto") if candidate else None,
-        "score_evento": candidate.get("score_evento") if candidate else None,
-        "fuente_documento_match": candidate.get("fuente_documento_match") if candidate else None,
-        "asunto_tipo_match": candidate.get("asunto_tipo_match") if candidate else None,
-        "evento_tipo_match": candidate.get("evento_tipo_match") if candidate else None,
-        "tipo_match_correo": "GUIA_ULTIMOS_9_DIGITOS"
-        if use_guia and guia_candidate and guia_candidate.get("cumple_guia")
-        else candidate.get("tipo_match_correo") if candidate else None,
-        "distancia_correo": candidate.get("distancia_correo") if candidate else None,
-        "correo_esperado": guia_candidate.get("guia_esperada")
-        if use_guia and guia_candidate
-        else candidate.get("correo_esperado") if candidate else None,
-        "correo_certificado": guia_candidate.get("guia_fisica")
-        if use_guia and guia_candidate
-        else candidate.get("correo_certificado") if candidate else None,
+        "score_asunto": score_asunto,
+        "score_evento": score_evento,
+        "fuente_documento_match": fuente_documento_match,
+        "asunto_tipo_match": asunto_tipo_match,
+        "evento_tipo_match": evento_tipo_match,
+        "tipo_match_correo": tipo_match_correo,
+        "distancia_correo": distancia_correo,
+        "correo_esperado": correo_esperado,
+        "correo_certificado": correo_certificado,
         "fecha_audiencia": fecha_referencia,
         "fecha_envio_certificado": fecha_evidencia,
         "dias_despues_audiencia": dias_despues_referencia,
@@ -1132,6 +1240,7 @@ def recalcular_cruce_notificaciones(
     correo_index = _build_correo_index(correo_rows)
     guia_rows = _fetch_guia_rows(date_window)
     guia_index = _build_guia_index(guia_rows)
+    guia_document_index = _build_guia_document_index(guia_rows)
 
     updates = []
     cruce_rows = []
@@ -1189,13 +1298,17 @@ def recalcular_cruce_notificaciones(
 
     for expected_row in expected_rows:
         candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
-        guia_candidate, has_guide_number = _best_guia_candidate(expected_row, guia_index)
+        guia_candidate, has_guia_lookup = _best_guia_candidate(
+            expected_row,
+            guia_index,
+            guia_document_index,
+        )
         update_row, cruce_row = _build_revision_rows(
             expected_row,
             candidate,
             has_document_candidates,
             guia_candidate,
-            has_guide_number,
+            has_guia_lookup,
         )
         updates.append(update_row)
         cruce_rows.append(cruce_row)
