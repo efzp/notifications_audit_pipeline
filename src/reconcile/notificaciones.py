@@ -27,7 +27,7 @@ ESTADO_GUIA_NO_COINCIDE = "GUIA_NO_COINCIDE"
 ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
 
 PLAZO_DIAS_CALENDARIO = 2
-GUIA_FECHA_VENTANA_DIAS = 7
+GUIA_FECHA_VENTANA_DIAS = 20
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
@@ -843,7 +843,7 @@ def _status_from_guia_candidate(
 
     if guia_candidate.get("guia_fuera_de_plazo"):
         return ESTADO_FUERA_DE_PLAZO, (
-            "La guia fue entregada entre 3 y 7 dias despues de la fecha de referencia"
+            "La guia fue entregada entre 3 y 20 dias despues de la fecha de referencia"
         )
 
     return ESTADO_GUIA_NO_COINCIDE, "La guia no cumple los criterios de validacion"

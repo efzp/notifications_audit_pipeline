@@ -14,6 +14,10 @@ BEGIN
         numero_radicado_normalizado NVARCHAR(100) NULL,
         nombre_pestana NVARCHAR(255) NULL,
         sala NVARCHAR(255) NULL,
+        sala_acta NVARCHAR(255) NULL,
+        sala_caso_calificado NVARCHAR(255) NULL,
+        tiene_acta_audiencia BIT NOT NULL
+            CONSTRAINT DF_resumen_validacion_tiene_acta DEFAULT (0),
         fecha_audiencia DATE NULL,
         cedula NVARCHAR(50) NULL,
         nombre_paciente NVARCHAR(500) NULL,
@@ -46,6 +50,25 @@ IF COL_LENGTH('jnc.resumen_validacion_radicado', 'cruces_json') IS NULL
 BEGIN
     ALTER TABLE jnc.resumen_validacion_radicado
         ADD cruces_json NVARCHAR(MAX) NULL;
+END;
+
+IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala_acta') IS NULL
+BEGIN
+    ALTER TABLE jnc.resumen_validacion_radicado
+        ADD sala_acta NVARCHAR(255) NULL;
+END;
+
+IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala_caso_calificado') IS NULL
+BEGIN
+    ALTER TABLE jnc.resumen_validacion_radicado
+        ADD sala_caso_calificado NVARCHAR(255) NULL;
+END;
+
+IF COL_LENGTH('jnc.resumen_validacion_radicado', 'tiene_acta_audiencia') IS NULL
+BEGIN
+    ALTER TABLE jnc.resumen_validacion_radicado
+        ADD tiene_acta_audiencia BIT NOT NULL
+            CONSTRAINT DF_resumen_validacion_tiene_acta DEFAULT (0);
 END;
 
 IF NOT EXISTS (
@@ -91,12 +114,20 @@ BEGIN
     WITH caso_base AS (
         SELECT
             cc.*,
+            COALESCE(
+                NULLIF(cc.hoja_trabajo_sala, ''),
+                NULLIF(cc.hoja_trabajo_sala_normalizada, ''),
+                NULLIF(cc.pestana_sala_normalizada, '')
+            ) AS sala_caso_calificado,
+            CASE WHEN ac_resumen.id_audiencia_caso IS NULL THEN 0 ELSE 1 END
+                AS tiene_acta_audiencia,
             ac_resumen.sala AS sala_audiencia_caso,
             ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
             ac_resumen.nombre_paciente AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
         OUTER APPLY (
             SELECT TOP (1)
+                ac.id_audiencia_caso,
                 ac.sala,
                 ac.fecha_audiencia,
                 ac.nombre_paciente
@@ -132,7 +163,10 @@ BEGIN
             cc.numero_radicado,
             cc.numero_radicado_normalizado,
             cc.pestana_nombre AS nombre_pestana,
-            cc.sala_audiencia_caso AS sala,
+            COALESCE(cc.sala_audiencia_caso, cc.sala_caso_calificado) AS sala,
+            cc.sala_audiencia_caso AS sala_acta,
+            cc.sala_caso_calificado,
+            CAST(MAX(cc.tiene_acta_audiencia) AS BIT) AS tiene_acta_audiencia,
             cc.fecha_audiencia_resumen AS fecha_audiencia,
             MAX(ne.cedula) AS cedula,
             cc.nombre_paciente_audiencia_caso AS nombre_paciente,
@@ -169,6 +203,7 @@ BEGIN
             cc.numero_radicado_normalizado,
             cc.pestana_nombre,
             cc.sala_audiencia_caso,
+            cc.sala_caso_calificado,
             cc.fecha_audiencia_resumen,
             cc.nombre_paciente_audiencia_caso
     ),
@@ -178,6 +213,9 @@ BEGIN
             numero_radicado_normalizado,
             MAX(nombre_pestana) AS nombre_pestana,
             MAX(sala) AS sala,
+            MAX(sala_acta) AS sala_acta,
+            MAX(sala_caso_calificado) AS sala_caso_calificado,
+            CAST(MAX(CAST(tiene_acta_audiencia AS INT)) AS BIT) AS tiene_acta_audiencia,
             MAX(fecha_audiencia) AS fecha_audiencia,
             MAX(cedula) AS cedula,
             MAX(nombre_paciente) AS nombre_paciente,
@@ -262,6 +300,9 @@ BEGIN
         numero_radicado_normalizado,
         nombre_pestana,
         sala,
+        sala_acta,
+        sala_caso_calificado,
+        tiene_acta_audiencia,
         fecha_audiencia,
         cedula,
         nombre_paciente,
@@ -292,6 +333,9 @@ BEGIN
         rpr.numero_radicado_normalizado,
         rpr.nombre_pestana,
         rpr.sala,
+        rpr.sala_acta,
+        rpr.sala_caso_calificado,
+        rpr.tiene_acta_audiencia,
         rpr.fecha_audiencia,
         rpr.cedula,
         rpr.nombre_paciente,

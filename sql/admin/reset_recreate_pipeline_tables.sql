@@ -400,6 +400,10 @@ CREATE TABLE jnc.resumen_validacion_radicado (
     numero_radicado_normalizado NVARCHAR(100) NULL,
     nombre_pestana NVARCHAR(255) NULL,
     sala NVARCHAR(255) NULL,
+    sala_acta NVARCHAR(255) NULL,
+    sala_caso_calificado NVARCHAR(255) NULL,
+    tiene_acta_audiencia BIT NOT NULL
+        CONSTRAINT DF_resumen_validacion_tiene_acta DEFAULT (0),
     fecha_audiencia DATE NULL,
     cedula NVARCHAR(50) NULL,
     nombre_paciente NVARCHAR(500) NULL,
