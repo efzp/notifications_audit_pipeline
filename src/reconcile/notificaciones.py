@@ -1228,10 +1228,13 @@ def recalcular_cruce_notificaciones(
     )
     all_expected_rows = fetched_expected_rows
     latest_audiencia_caso_date = _fetch_latest_audiencia_caso_date()
-    all_expected_rows, raw_skipped_by_date = _filter_raw_by_latest_audiencia_date(
-        all_expected_rows,
-        latest_audiencia_caso_date,
-    )
+    aplica_filtro_raw_fecha_maxima = id_archivo_salas is None
+    raw_skipped_by_date = 0
+    if aplica_filtro_raw_fecha_maxima:
+        all_expected_rows, raw_skipped_by_date = _filter_raw_by_latest_audiencia_date(
+            all_expected_rows,
+            latest_audiencia_caso_date,
+        )
     expected_rows = all_expected_rows
     if solo_pendientes:
         expected_rows = [
@@ -1272,6 +1275,7 @@ def recalcular_cruce_notificaciones(
         "next_cursor": None,
         "chunked_run": chunked_run,
         "refrescar_resumen": refrescar_resumen,
+        "filtro_raw_fecha_maxima_aplicado": aplica_filtro_raw_fecha_maxima,
         "raw_omitidas_por_fecha_audiencia": raw_skipped_by_date,
         "fecha_audiencia_caso_maxima": latest_audiencia_caso_date.isoformat()
         if latest_audiencia_caso_date
