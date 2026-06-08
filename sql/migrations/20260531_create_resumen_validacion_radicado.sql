@@ -17,6 +17,7 @@ BEGIN
         fecha_audiencia DATE NULL,
         cedula NVARCHAR(50) NULL,
         nombre_paciente NVARCHAR(500) NULL,
+        cruces_json NVARCHAR(MAX) NULL,
         condicion_pacientes BIT NOT NULL,
         condicion_pacientes_extemporaneo BIT NOT NULL,
         condicion_regional BIT NOT NULL,
@@ -39,6 +40,12 @@ BEGIN
         fecha_actualizacion_resumen DATETIME2(0) NOT NULL
             CONSTRAINT DF_resumen_validacion_fecha_actualizacion DEFAULT (SYSUTCDATETIME())
     );
+END;
+
+IF COL_LENGTH('jnc.resumen_validacion_radicado', 'cruces_json') IS NULL
+BEGIN
+    ALTER TABLE jnc.resumen_validacion_radicado
+        ADD cruces_json NVARCHAR(MAX) NULL;
 END;
 
 IF NOT EXISTS (
@@ -71,10 +78,6 @@ BEGIN
 END;
 GO
 
--- Carga inicial del cache si ya existen datos procesados.
-EXEC jnc.refrescar_resumen_validacion_radicado;
-GO
-
 CREATE OR ALTER PROCEDURE jnc.refrescar_resumen_validacion_radicado
 AS
 BEGIN
@@ -88,40 +91,22 @@ BEGIN
     WITH caso_base AS (
         SELECT
             cc.*,
-            ac_sala.sala AS sala_audiencia_caso,
-            COALESCE(
-                cc.hoja_trabajo_fecha_audiencia,
-                cc.pestana_fecha,
-                CASE
-                    WHEN PATINDEX(
-                        '%[0-3][0-9]-[0-1][0-9]-[1-2][0-9][0-9][0-9]%',
-                        cc.pestana_nombre
-                    ) > 0
-                    THEN TRY_CONVERT(
-                        DATE,
-                        SUBSTRING(
-                            cc.pestana_nombre,
-                            PATINDEX(
-                                '%[0-3][0-9]-[0-1][0-9]-[1-2][0-9][0-9][0-9]%',
-                                cc.pestana_nombre
-                            ),
-                            10
-                        ),
-                        105
-                    )
-                END
-            ) AS fecha_audiencia_resumen
+            ac_resumen.sala AS sala_audiencia_caso,
+            ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
+            ac_resumen.nombre_paciente AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
         OUTER APPLY (
             SELECT TOP (1)
-                ac.sala
+                ac.sala,
+                ac.fecha_audiencia,
+                ac.nombre_paciente
             FROM jnc.audiencia_caso AS ac
             WHERE ac.activo = 1
               AND ac.numero_radicado_normalizado = cc.numero_radicado_normalizado
             ORDER BY
                 ac.fecha_audiencia DESC,
                 ac.id_audiencia_caso DESC
-        ) AS ac_sala
+        ) AS ac_resumen
         WHERE cc.activo = 1
     ),
     notificacion_estado AS (
@@ -150,31 +135,31 @@ BEGIN
             cc.sala_audiencia_caso AS sala,
             cc.fecha_audiencia_resumen AS fecha_audiencia,
             MAX(ne.cedula) AS cedula,
-            cc.nombre_paciente,
+            cc.nombre_paciente_audiencia_caso AS nombre_paciente,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'PACIENTES' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'PACIENTES' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_pacientes,
-            MAX(CASE WHEN ne.tipo_destinatario = 'PACIENTES' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_pacientes_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'PACIENTES' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'PACIENTES' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_pacientes_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'REGIONAL' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'REGIONAL' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_regional,
-            MAX(CASE WHEN ne.tipo_destinatario = 'REGIONAL' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_regional_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'REGIONAL' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'REGIONAL' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_regional_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'EMPLEADOR' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'EMPLEADOR' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_empleador,
-            MAX(CASE WHEN ne.tipo_destinatario = 'EMPLEADOR' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_empleador_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'EMPLEADOR' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'EMPLEADOR' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_empleador_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'REMITENTE' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'REMITENTE' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_remitente,
-            MAX(CASE WHEN ne.tipo_destinatario = 'REMITENTE' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_remitente_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'REMITENTE' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'REMITENTE' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_remitente_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'EPS' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'EPS' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_eps,
-            MAX(CASE WHEN ne.tipo_destinatario = 'EPS' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_eps_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'EPS' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'EPS' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_eps_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'AFP' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'AFP' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_afp,
-            MAX(CASE WHEN ne.tipo_destinatario = 'AFP' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_afp_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'AFP' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'AFP' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_afp_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'ARL' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'ARL' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_arl,
-            MAX(CASE WHEN ne.tipo_destinatario = 'ARL' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_arl_extemporaneo,
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'ARL' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'ARL' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_arl_extemporaneo,
 
             CASE WHEN COUNT(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' THEN 1 END) = 0 THEN 1 ELSE MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) END AS condicion_aseguradoras,
-            MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) AS condicion_aseguradoras_extemporaneo
+            CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_aseguradoras_extemporaneo
         FROM caso_base AS cc
         LEFT JOIN notificacion_estado AS ne
             ON ne.id_caso = cc.id_caso
@@ -185,7 +170,7 @@ BEGIN
             cc.pestana_nombre,
             cc.sala_audiencia_caso,
             cc.fecha_audiencia_resumen,
-            cc.nombre_paciente
+            cc.nombre_paciente_audiencia_caso
     ),
     resumen_por_radicado AS (
         SELECT
@@ -197,24 +182,80 @@ BEGIN
             MAX(cedula) AS cedula,
             MAX(nombre_paciente) AS nombre_paciente,
             CAST(MAX(condicion_pacientes) AS BIT) AS condicion_pacientes,
-            CAST(MAX(condicion_pacientes_extemporaneo) AS BIT) AS condicion_pacientes_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_pacientes) = 1 THEN 0 ELSE MAX(condicion_pacientes_extemporaneo) END AS BIT) AS condicion_pacientes_extemporaneo,
             CAST(MAX(condicion_regional) AS BIT) AS condicion_regional,
-            CAST(MAX(condicion_regional_extemporaneo) AS BIT) AS condicion_regional_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_regional) = 1 THEN 0 ELSE MAX(condicion_regional_extemporaneo) END AS BIT) AS condicion_regional_extemporaneo,
             CAST(MAX(condicion_empleador) AS BIT) AS condicion_empleador,
-            CAST(MAX(condicion_empleador_extemporaneo) AS BIT) AS condicion_empleador_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_empleador) = 1 THEN 0 ELSE MAX(condicion_empleador_extemporaneo) END AS BIT) AS condicion_empleador_extemporaneo,
             CAST(MAX(condicion_remitente) AS BIT) AS condicion_remitente,
-            CAST(MAX(condicion_remitente_extemporaneo) AS BIT) AS condicion_remitente_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_remitente) = 1 THEN 0 ELSE MAX(condicion_remitente_extemporaneo) END AS BIT) AS condicion_remitente_extemporaneo,
             CAST(MAX(condicion_eps) AS BIT) AS condicion_eps,
-            CAST(MAX(condicion_eps_extemporaneo) AS BIT) AS condicion_eps_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_eps) = 1 THEN 0 ELSE MAX(condicion_eps_extemporaneo) END AS BIT) AS condicion_eps_extemporaneo,
             CAST(MAX(condicion_afp) AS BIT) AS condicion_afp,
-            CAST(MAX(condicion_afp_extemporaneo) AS BIT) AS condicion_afp_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_afp) = 1 THEN 0 ELSE MAX(condicion_afp_extemporaneo) END AS BIT) AS condicion_afp_extemporaneo,
             CAST(MAX(condicion_arl) AS BIT) AS condicion_arl,
-            CAST(MAX(condicion_arl_extemporaneo) AS BIT) AS condicion_arl_extemporaneo,
+            CAST(CASE WHEN MAX(condicion_arl) = 1 THEN 0 ELSE MAX(condicion_arl_extemporaneo) END AS BIT) AS condicion_arl_extemporaneo,
             CAST(MAX(condicion_aseguradoras) AS BIT) AS condicion_aseguradoras,
-            CAST(MAX(condicion_aseguradoras_extemporaneo) AS BIT) AS condicion_aseguradoras_extemporaneo
+            CAST(CASE WHEN MAX(condicion_aseguradoras) = 1 THEN 0 ELSE MAX(condicion_aseguradoras_extemporaneo) END AS BIT) AS condicion_aseguradoras_extemporaneo
         FROM resumen_por_caso
         GROUP BY
             numero_radicado_normalizado
+    ),
+    cruces_por_radicado AS (
+        SELECT
+            rcn_base.numero_radicado_normalizado,
+            (
+                SELECT
+                    rcn.id_resultado_cruce,
+                    rcn.id_notificacion_esperada,
+                    rcn.id_caso,
+                    rcn.id_archivo,
+                    rcn.numero_radicado,
+                    rcn.numero_radicado_normalizado,
+                    rcn.cedula,
+                    rcn.cedula_normalizada,
+                    rcn.tipo_destinatario,
+                    rcn.id_notificacion_correo_certificado_match,
+                    rcn.id_archivo_correo_certificado_match,
+                    rcn.numero_linea_csv_match,
+                    rcn.estado_revision_notificacion,
+                    rcn.descripcion_revision,
+                    rcn.cumple_documento,
+                    rcn.cumple_asunto,
+                    rcn.cumple_evento,
+                    rcn.cumple_correo,
+                    rcn.cumple_plazo,
+                    rcn.score_total,
+                    rcn.score_asunto,
+                    rcn.score_evento,
+                    rcn.fuente_documento_match,
+                    rcn.asunto_tipo_match,
+                    rcn.evento_tipo_match,
+                    rcn.tipo_match_correo,
+                    rcn.distancia_correo,
+                    rcn.correo_esperado,
+                    rcn.correo_certificado,
+                    rcn.fecha_audiencia,
+                    rcn.fecha_envio_certificado,
+                    rcn.dias_despues_audiencia,
+                    rcn.fecha_revision,
+                    rcn.version_regla_cruce,
+                    JSON_QUERY(rcn.detalle_revision_json) AS detalle_revision_json
+                FROM jnc.resultado_cruce_notificacion AS rcn
+                WHERE rcn.activo = 1
+                  AND rcn.numero_radicado_normalizado = rcn_base.numero_radicado_normalizado
+                ORDER BY
+                    rcn.tipo_destinatario,
+                    rcn.id_resultado_cruce
+                FOR JSON PATH
+            ) AS cruces_json
+        FROM (
+            SELECT DISTINCT
+                numero_radicado_normalizado
+            FROM jnc.resultado_cruce_notificacion
+            WHERE activo = 1
+              AND numero_radicado_normalizado IS NOT NULL
+        ) AS rcn_base
     )
     INSERT INTO jnc.resumen_validacion_radicado (
         numero_radicado,
@@ -224,6 +265,7 @@ BEGIN
         fecha_audiencia,
         cedula,
         nombre_paciente,
+        cruces_json,
         condicion_pacientes,
         condicion_pacientes_extemporaneo,
         condicion_regional,
@@ -246,62 +288,73 @@ BEGIN
         fecha_actualizacion_resumen
     )
     SELECT
-        numero_radicado,
-        numero_radicado_normalizado,
-        nombre_pestana,
-        sala,
-        fecha_audiencia,
-        cedula,
-        nombre_paciente,
-        condicion_pacientes,
-        condicion_pacientes_extemporaneo,
-        condicion_regional,
-        condicion_regional_extemporaneo,
-        condicion_empleador,
-        condicion_empleador_extemporaneo,
-        condicion_remitente,
-        condicion_remitente_extemporaneo,
-        condicion_eps,
-        condicion_eps_extemporaneo,
-        condicion_afp,
-        condicion_afp_extemporaneo,
-        condicion_arl,
-        condicion_arl_extemporaneo,
-        condicion_aseguradoras,
-        condicion_aseguradoras_extemporaneo,
+        rpr.numero_radicado,
+        rpr.numero_radicado_normalizado,
+        rpr.nombre_pestana,
+        rpr.sala,
+        rpr.fecha_audiencia,
+        rpr.cedula,
+        rpr.nombre_paciente,
+        COALESCE(cg.cruces_json, N'[]') AS cruces_json,
+        rpr.condicion_pacientes,
+        rpr.condicion_pacientes_extemporaneo,
+        rpr.condicion_regional,
+        rpr.condicion_regional_extemporaneo,
+        rpr.condicion_empleador,
+        rpr.condicion_empleador_extemporaneo,
+        rpr.condicion_remitente,
+        rpr.condicion_remitente_extemporaneo,
+        rpr.condicion_eps,
+        rpr.condicion_eps_extemporaneo,
+        rpr.condicion_afp,
+        rpr.condicion_afp_extemporaneo,
+        rpr.condicion_arl,
+        rpr.condicion_arl_extemporaneo,
+        rpr.condicion_aseguradoras,
+        rpr.condicion_aseguradoras_extemporaneo,
         CAST(
             CASE
-                WHEN condicion_pacientes = 1
-                 AND condicion_regional = 1
-                 AND condicion_empleador = 1
-                 AND condicion_remitente = 1
-                 AND condicion_eps = 1
-                 AND condicion_afp = 1
-                 AND condicion_arl = 1
-                 AND condicion_aseguradoras = 1
+                WHEN rpr.condicion_pacientes = 1
+                 AND rpr.condicion_regional = 1
+                 AND rpr.condicion_empleador = 1
+                 AND rpr.condicion_remitente = 1
+                 AND rpr.condicion_eps = 1
+                 AND rpr.condicion_afp = 1
+                 AND rpr.condicion_arl = 1
+                 AND rpr.condicion_aseguradoras = 1
                 THEN 1
                 ELSE 0
             END AS BIT
         ) AS cumplimiento_total,
         CAST(
             CASE
-                WHEN condicion_pacientes = 1
-                 AND condicion_regional = 1
-                 AND condicion_empleador = 1
-                 AND condicion_remitente = 1
-                 AND condicion_eps = 1
-                 AND condicion_afp = 1
-                 AND condicion_arl = 1
-                 AND condicion_aseguradoras = 1
+                WHEN rpr.condicion_pacientes = 1
+                 AND rpr.condicion_regional = 1
+                 AND rpr.condicion_empleador = 1
+                 AND rpr.condicion_remitente = 1
+                 AND rpr.condicion_eps = 1
+                 AND rpr.condicion_afp = 1
+                 AND rpr.condicion_arl = 1
+                 AND rpr.condicion_aseguradoras = 1
                 THEN 0
-                WHEN (condicion_pacientes = 0 AND condicion_pacientes_extemporaneo = 1)
-                  OR (condicion_regional = 0 AND condicion_regional_extemporaneo = 1)
-                  OR (condicion_empleador = 0 AND condicion_empleador_extemporaneo = 1)
-                  OR (condicion_remitente = 0 AND condicion_remitente_extemporaneo = 1)
-                  OR (condicion_eps = 0 AND condicion_eps_extemporaneo = 1)
-                  OR (condicion_afp = 0 AND condicion_afp_extemporaneo = 1)
-                  OR (condicion_arl = 0 AND condicion_arl_extemporaneo = 1)
-                  OR (condicion_aseguradoras = 0 AND condicion_aseguradoras_extemporaneo = 1)
+                WHEN (rpr.condicion_pacientes = 1 OR rpr.condicion_pacientes_extemporaneo = 1)
+                 AND (rpr.condicion_regional = 1 OR rpr.condicion_regional_extemporaneo = 1)
+                 AND (rpr.condicion_empleador = 1 OR rpr.condicion_empleador_extemporaneo = 1)
+                 AND (rpr.condicion_remitente = 1 OR rpr.condicion_remitente_extemporaneo = 1)
+                 AND (rpr.condicion_eps = 1 OR rpr.condicion_eps_extemporaneo = 1)
+                 AND (rpr.condicion_afp = 1 OR rpr.condicion_afp_extemporaneo = 1)
+                 AND (rpr.condicion_arl = 1 OR rpr.condicion_arl_extemporaneo = 1)
+                 AND (rpr.condicion_aseguradoras = 1 OR rpr.condicion_aseguradoras_extemporaneo = 1)
+                 AND (
+                    rpr.condicion_pacientes_extemporaneo = 1
+                    OR rpr.condicion_regional_extemporaneo = 1
+                    OR rpr.condicion_empleador_extemporaneo = 1
+                    OR rpr.condicion_remitente_extemporaneo = 1
+                    OR rpr.condicion_eps_extemporaneo = 1
+                    OR rpr.condicion_afp_extemporaneo = 1
+                    OR rpr.condicion_arl_extemporaneo = 1
+                    OR rpr.condicion_aseguradoras_extemporaneo = 1
+                 )
                 THEN 1
                 ELSE 0
             END AS BIT
@@ -309,20 +362,26 @@ BEGIN
         NULLIF(
             CONCAT_WS(
                 ', ',
-                CASE WHEN condicion_pacientes = 0 AND condicion_pacientes_extemporaneo = 0 THEN 'PACIENTES' END,
-                CASE WHEN condicion_regional = 0 AND condicion_regional_extemporaneo = 0 THEN 'REGIONAL' END,
-                CASE WHEN condicion_empleador = 0 AND condicion_empleador_extemporaneo = 0 THEN 'EMPLEADOR' END,
-                CASE WHEN condicion_remitente = 0 AND condicion_remitente_extemporaneo = 0 THEN 'REMITENTE' END,
-                CASE WHEN condicion_eps = 0 AND condicion_eps_extemporaneo = 0 THEN 'EPS' END,
-                CASE WHEN condicion_afp = 0 AND condicion_afp_extemporaneo = 0 THEN 'AFP' END,
-                CASE WHEN condicion_arl = 0 AND condicion_arl_extemporaneo = 0 THEN 'ARL' END,
-                CASE WHEN condicion_aseguradoras = 0 AND condicion_aseguradoras_extemporaneo = 0 THEN 'ASEGURADORAS' END
+                CASE WHEN rpr.condicion_pacientes = 0 AND rpr.condicion_pacientes_extemporaneo = 0 THEN 'PACIENTES' END,
+                CASE WHEN rpr.condicion_regional = 0 AND rpr.condicion_regional_extemporaneo = 0 THEN 'REGIONAL' END,
+                CASE WHEN rpr.condicion_empleador = 0 AND rpr.condicion_empleador_extemporaneo = 0 THEN 'EMPLEADOR' END,
+                CASE WHEN rpr.condicion_remitente = 0 AND rpr.condicion_remitente_extemporaneo = 0 THEN 'REMITENTE' END,
+                CASE WHEN rpr.condicion_eps = 0 AND rpr.condicion_eps_extemporaneo = 0 THEN 'EPS' END,
+                CASE WHEN rpr.condicion_afp = 0 AND rpr.condicion_afp_extemporaneo = 0 THEN 'AFP' END,
+                CASE WHEN rpr.condicion_arl = 0 AND rpr.condicion_arl_extemporaneo = 0 THEN 'ARL' END,
+                CASE WHEN rpr.condicion_aseguradoras = 0 AND rpr.condicion_aseguradoras_extemporaneo = 0 THEN 'ASEGURADORAS' END
             ),
             ''
         ) AS no_cumplimiento_revision_manual,
         SYSUTCDATETIME() AS fecha_actualizacion_resumen
-    FROM resumen_por_radicado;
+    FROM resumen_por_radicado AS rpr
+    LEFT JOIN cruces_por_radicado AS cg
+        ON cg.numero_radicado_normalizado = rpr.numero_radicado_normalizado;
 
     COMMIT TRANSACTION;
 END;
+GO
+
+-- Carga inicial del cache si ya existen datos procesados.
+EXEC jnc.refrescar_resumen_validacion_radicado;
 GO
