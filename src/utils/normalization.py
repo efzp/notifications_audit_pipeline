@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 
@@ -61,9 +61,22 @@ def normalize_date(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
 
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            serial = float(value)
+        except (TypeError, ValueError):
+            serial = None
+        if serial is not None and serial.is_integer() and 20000 <= serial <= 80000:
+            return (date(1899, 12, 30) + timedelta(days=int(serial))).isoformat()
+
     clean_value = clean_text(value)
     if clean_value is None:
         return None
+
+    if re.fullmatch(r"\d{5}", clean_value):
+        serial = int(clean_value)
+        if 20000 <= serial <= 80000:
+            return (date(1899, 12, 30) + timedelta(days=serial)).isoformat()
 
     try:
         return datetime.fromisoformat(clean_value).date().isoformat()

@@ -209,6 +209,11 @@ notificaciones_pendientes_priorizadas AS (
                     COALESCE(np.cedula_normalizada, ''),
                     np.tipo_destinatario
                 ORDER BY
+                    CASE
+                        WHEN np.estado_revision_notificacion <> 'SIN_REVISION'
+                            THEN 1
+                        ELSE 0
+                    END DESC,
                     CASE WHEN np.id_caso = co.id_caso THEN 1 ELSE 0 END DESC,
                     fecha_pestana.fecha_pestana_nombre DESC,
                     np.fecha_revision_notificacion DESC,

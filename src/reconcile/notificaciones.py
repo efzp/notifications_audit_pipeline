@@ -350,6 +350,21 @@ def _correo_date_window(expected_rows: list[dict[str, Any]]) -> tuple[date, date
     )
 
 
+def _guia_date_window(expected_rows: list[dict[str, Any]]) -> tuple[date, date] | None:
+    dates = [
+        reference_date
+        for row in expected_rows
+        if (reference_date := _expected_reference_date(row)) is not None
+    ]
+    if not dates:
+        return None
+
+    return (
+        min(dates) - timedelta(days=GUIA_FECHA_VENTANA_DIAS),
+        max(dates) + timedelta(days=GUIA_FECHA_VENTANA_DIAS),
+    )
+
+
 def _fetch_correo_rows(date_window: tuple[date, date] | None = None) -> list[dict[str, Any]]:
     columns = [
         "id_notificacion_correo",
@@ -737,11 +752,12 @@ def _score_guia_candidate(
         and PLAZO_DIAS_CALENDARIO < days_after_reference <= GUIA_FECHA_VENTANA_DIAS
     )
     estado_entregado = _guia_estado_entregado(guia_row)
-    guia_ok = (
-        bool(expected_guide_key and expected_guide_key == guia_key)
-        if metodo_busqueda == "GUIA_ULTIMOS_9_DIGITOS"
-        else bool(document_ok and date_in_window and estado_entregado)
-    )
+    if metodo_busqueda == "GUIA_ULTIMOS_9_DIGITOS":
+        guia_ok = bool(expected_guide_key and expected_guide_key == guia_key)
+    elif metodo_busqueda == "GUIA_CEDULA_FALLBACK":
+        guia_ok = bool(document_ok and estado_entregado)
+    else:
+        guia_ok = bool(document_ok and date_in_window and estado_entregado)
     checks = {
         "cumple_guia": guia_ok,
         "cumple_documento": document_ok,
@@ -821,12 +837,12 @@ def _status_from_guia_candidate(
     if guia_candidate is None:
         return ESTADO_GUIA_NO_COINCIDE, (
             "No se encontro guia entregada que coincida por numero de guia o por cedula "
-            "y fecha de entrega dentro de los 7 dias posteriores"
+            "y fecha de entrega dentro de la ventana posterior"
         )
 
     if not guia_candidate.get("guia_fecha_en_ventana"):
         return ESTADO_GUIA_NO_COINCIDE, (
-            "La guia existe, pero la fecha de entrega no cae dentro de los 7 dias posteriores"
+            "La guia existe, pero la fecha de entrega no cae dentro de la ventana posterior"
         )
 
     if not guia_candidate.get("cumple_documento"):
@@ -838,6 +854,10 @@ def _status_from_guia_candidate(
         if guia_candidate.get("metodo_busqueda") == "GUIA_CEDULA_FECHA_ENVIA":
             return ESTADO_CUMPLE, (
                 "Notificacion validada contra guia de correo fisico por cedula y fecha"
+            )
+        if guia_candidate.get("metodo_busqueda") == "GUIA_CEDULA_FALLBACK":
+            return ESTADO_CUMPLE, (
+                "Notificacion validada contra guia de correo fisico por cedula"
             )
         return ESTADO_CUMPLE, "Notificacion validada contra guia de correo fisico"
 
@@ -887,25 +907,44 @@ def _best_guia_candidate(
 ) -> tuple[dict[str, Any] | None, bool]:
     expected_guide_key = _right_digits(expected_row.get("correo_o_guia_reportado"))
     metodo_busqueda = _guia_lookup_method(expected_row)
+    expected_document = normalize_document(
+        expected_row.get("cedula_normalizada") or expected_row.get("cedula")
+    )
     if expected_guide_key:
         candidates = guia_index.get(expected_guide_key, [])
     elif metodo_busqueda == "GUIA_CEDULA_FECHA_ENVIA":
-        expected_document = normalize_document(
-            expected_row.get("cedula_normalizada") or expected_row.get("cedula")
-        )
         if not expected_document:
             return None, False
         candidates = guia_document_index.get(expected_document, [])
     else:
         return None, False
 
-    if not candidates:
+    scored_candidates = (
+        [_score_guia_candidate(expected_row, row, metodo_busqueda) for row in candidates]
+        if candidates
+        else []
+    )
+    if (
+        expected_guide_key
+        and expected_document
+        and (
+            not scored_candidates
+            or not any(
+                item["guia_fecha_en_ventana"] and item["cumple_documento"]
+                for item in scored_candidates
+            )
+        )
+    ):
+        fallback_candidates = guia_document_index.get(expected_document, [])
+        scored_candidates.extend(
+            _score_guia_candidate(expected_row, row, "GUIA_CEDULA_FALLBACK")
+            for row in fallback_candidates
+            if _guia_number(row) != expected_guide_key
+        )
+
+    if not scored_candidates:
         return None, True
 
-    scored_candidates = [
-        _score_guia_candidate(expected_row, row, metodo_busqueda)
-        for row in candidates
-    ]
     scored_candidates.sort(
         key=lambda item: (
             item["guia_fecha_en_ventana"],
@@ -913,6 +952,7 @@ def _best_guia_candidate(
             item["cumple_plazo"],
             item["guia_fuera_de_plazo"],
             item["score_total"],
+            item["metodo_busqueda"] == "GUIA_ULTIMOS_9_DIGITOS",
         ),
         reverse=True,
     )
@@ -1244,9 +1284,10 @@ def recalcular_cruce_notificaciones(
         ]
 
     date_window = _correo_date_window(expected_rows)
+    guia_date_window = _guia_date_window(expected_rows)
     correo_rows = _fetch_correo_rows(date_window)
     correo_index = _build_correo_index(correo_rows)
-    guia_rows = _fetch_guia_rows(date_window)
+    guia_rows = _fetch_guia_rows(guia_date_window)
     guia_index = _build_guia_index(guia_rows)
     guia_document_index = _build_guia_document_index(guia_rows)
 
@@ -1286,6 +1327,8 @@ def recalcular_cruce_notificaciones(
         "guias_entregadas_indexadas": sum(len(rows) for rows in guia_index.values()),
         "ventana_correo_desde": date_window[0].isoformat() if date_window else None,
         "ventana_correo_hasta": date_window[1].isoformat() if date_window else None,
+        "ventana_guia_desde": guia_date_window[0].isoformat() if guia_date_window else None,
+        "ventana_guia_hasta": guia_date_window[1].isoformat() if guia_date_window else None,
         "cumplen": 0,
         "cumplen_por_guia_fisica": 0,
         "fuera_de_plazo_por_guia_fisica": 0,

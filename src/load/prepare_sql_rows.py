@@ -61,6 +61,13 @@ GUIA_CORREO_FISICO_MAX_LENGTHS = {
     "hash_guia": 64,
 }
 
+GUIA_CORREO_FISICO_DATE_FIELDS = {
+    "fec_captura",
+    "fec_entrega",
+    "fec_novedad",
+    "fec_aproxentrega",
+}
+
 AUDIENCIA_CASO_MAX_LENGTHS = {
     "numero_acta": 100,
     "numero_acta_normalizado": 100,
@@ -523,8 +530,15 @@ def prepare_guia_correo_fisico_rows(
     for source_row in result.get("tabla_guias_correo_fisico") or []:
         mapped_row = dict(source_row)
         mapped_row["id_archivo"] = id_archivo
-        mapped_row["ced_destinatario_normalizada"] = normalize_document(
-            mapped_row.get("ced_destinatario") or mapped_row.get("numero_documento")
+        for field_name in GUIA_CORREO_FISICO_DATE_FIELDS:
+            if field_name in mapped_row:
+                mapped_row[field_name] = normalize_date(mapped_row.get(field_name))
+        cedula_destinatario = normalize_document(mapped_row.get("ced_destinatario"))
+        if cedula_destinatario == "0":
+            cedula_destinatario = None
+        mapped_row["ced_destinatario_normalizada"] = (
+            cedula_destinatario
+            or normalize_document(mapped_row.get("numero_documento"))
         )
         mapped_row["fila_guia_json"] = json_dumps_safe(source_row)
         mapped_row["fecha_creacion"] = utc_now_iso()
