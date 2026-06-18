@@ -27,7 +27,7 @@ ESTADO_GUIA_NO_COINCIDE = "GUIA_NO_COINCIDE"
 ESTADO_REQUIERE_REVISION = "REQUIERE_REVISION_MANUAL"
 
 PLAZO_DIAS_CALENDARIO = 2
-GUIA_FECHA_VENTANA_DIAS = 20
+GUIA_FECHA_VENTANA_DIAS = 30
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
@@ -916,6 +916,14 @@ def _best_guia_candidate(
         if not expected_document:
             return None, False
         candidates = guia_document_index.get(expected_document, [])
+    elif (
+        str(expected_row.get("tipo_destinatario") or "").upper() == "PACIENTES"
+        and expected_document
+    ):
+        candidates = guia_document_index.get(expected_document, [])
+        if not candidates:
+            return None, False
+        metodo_busqueda = "GUIA_CEDULA_FALLBACK"
     else:
         return None, False
 
