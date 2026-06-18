@@ -533,12 +533,15 @@ def prepare_guia_correo_fisico_rows(
         for field_name in GUIA_CORREO_FISICO_DATE_FIELDS:
             if field_name in mapped_row:
                 mapped_row[field_name] = normalize_date(mapped_row.get(field_name))
+        numero_documento = normalize_document(mapped_row.get("numero_documento"))
         cedula_destinatario = normalize_document(mapped_row.get("ced_destinatario"))
+        if numero_documento == "0":
+            numero_documento = None
         if cedula_destinatario == "0":
             cedula_destinatario = None
         mapped_row["ced_destinatario_normalizada"] = (
-            cedula_destinatario
-            or normalize_document(mapped_row.get("numero_documento"))
+            numero_documento
+            or cedula_destinatario
         )
         mapped_row["fila_guia_json"] = json_dumps_safe(source_row)
         mapped_row["fecha_creacion"] = utc_now_iso()

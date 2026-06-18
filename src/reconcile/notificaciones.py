@@ -483,9 +483,9 @@ def _guia_delivery_date(row: dict[str, Any]) -> date | None:
 
 def _guia_document(row: dict[str, Any]) -> str:
     for field_name in (
+        "numero_documento",
         "ced_destinatario_normalizada",
         "ced_destinatario",
-        "numero_documento",
     ):
         document = normalize_document(row.get(field_name))
         if document and document != "0":
