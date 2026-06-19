@@ -419,6 +419,7 @@ def _fetch_guia_rows(date_window: tuple[date, date] | None = None) -> list[dict[
         "fecha_entrega",
         "ced_destinatario",
         "ced_destinatario_normalizada",
+        "nombre_destinatario",
         "numero_documento",
         "cartaporte",
         "des_estadog",
@@ -468,6 +469,12 @@ def _guia_estado_entregado(row: dict[str, Any]) -> bool:
     return "entregad" in estado
 
 
+def _guia_destinatario_es_devolucion(row: dict[str, Any]) -> bool:
+    nombre_destinatario = _normalize_match_text(row.get("nombre_destinatario"))
+    nombre_compacto = re.sub(r"[^a-z0-9]+", "", nombre_destinatario)
+    return "jnci" in nombre_compacto
+
+
 def _guia_number(row: dict[str, Any]) -> str | None:
     for field_name in ("guia", "cartaporte", "numero_guia", "correo_o_guia"):
         guide_key = _right_digits(row.get(field_name))
@@ -499,6 +506,8 @@ def _build_guia_index(guia_rows: list[dict[str, Any]]) -> dict[str, list[dict[st
     for row in guia_rows:
         if not _guia_estado_entregado(row):
             continue
+        if _guia_destinatario_es_devolucion(row):
+            continue
 
         guide_key = _guia_number(row)
         if guide_key:
@@ -511,6 +520,8 @@ def _build_guia_document_index(guia_rows: list[dict[str, Any]]) -> dict[str, lis
     index: dict[str, list[dict[str, Any]]] = {}
     for row in guia_rows:
         if not _guia_estado_entregado(row):
+            continue
+        if _guia_destinatario_es_devolucion(row):
             continue
 
         document = _guia_document(row)
