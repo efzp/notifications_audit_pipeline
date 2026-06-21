@@ -61,6 +61,42 @@ GUIA_CORREO_FISICO_MAX_LENGTHS = {
     "hash_guia": 64,
 }
 
+CALIFICACION_SISTEMA_CASO_MAX_LENGTHS = {
+    "hoja_origen": 255,
+    "sala": 255,
+    "numero_dictamen": 100,
+    "numero_dictamen_normalizado": 100,
+    "numero_radicado": 100,
+    "numero_radicado_normalizado": 100,
+    "entidad_remitente": 500,
+    "regional": 500,
+    "tipo_identificacion": 50,
+    "cedula": 50,
+    "cedula_normalizada": 50,
+    "nombre_paciente": 500,
+    "arl": 300,
+    "eps": 300,
+    "afp": 300,
+    "compania_seguros": 300,
+    "empresa_contratante": 500,
+    "medico_ponente": 255,
+    "terapeuta_psicologa": 255,
+    "medico_principal": 255,
+    "numero_acta_audiencia": 100,
+    "estado_solicitud": 255,
+    "hash_calificacion_sistema_caso": 64,
+}
+
+CALIFICACION_SISTEMA_ENVIO_MAX_LENGTHS = {
+    "tipo_entidad": 100,
+    "nombre_entidad": 500,
+    "correo_reportado": 1000,
+    "correo_normalizado": 1000,
+    "numero_notificacion_reportado": 100,
+    "fuente_dato": 100,
+    "hash_calificacion_sistema_envio": 64,
+}
+
 GUIA_CORREO_FISICO_DATE_FIELDS = {
     "fec_captura",
     "fec_entrega",
@@ -88,6 +124,34 @@ AUDIENCIA_CASO_MAX_LENGTHS = {
     "medico_principal_normalizado": 500,
     "terapeuta_psicologa": 500,
     "terapeuta_psicologa_normalizado": 500,
+}
+
+CASO_MAX_LENGTHS = {
+    "pestana_nombre": 255,
+    "pestana_sala_normalizada": 255,
+    "hoja_trabajo_sala": 255,
+    "hoja_trabajo_sala_normalizada": 255,
+    "numero_radicado": 100,
+    "numero_radicado_normalizado": 100,
+    "cedula": 50,
+    "cedula_normalizada": 50,
+    "nombre_paciente": 500,
+    "nombre_paciente_normalizado": 500,
+    "entidad_remitente": 500,
+    "regional": 255,
+    "medico_ponente": 255,
+    "medico_principal": 255,
+    "responsable_pago": 255,
+    "pago_entidad": 255,
+    "rp": 100,
+    "terapeuta_psicologa": 255,
+    "correo_guia": 500,
+    "eps": 300,
+    "afp": 300,
+    "arl": 300,
+    "asegurado": 300,
+    "hash_caso": 64,
+    "origen_tabla": 100,
 }
 
 CASO_HASH_EXCLUDED_FIELDS = {
@@ -272,6 +336,32 @@ def prepare_archivo_update_from_guias_result(id_archivo: int, result: dict[str, 
     }
 
 
+def prepare_archivo_update_from_calificaciones_result(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    total_rows = result.get("total_filas_calificaciones_software") or len(
+        result.get("tabla_calificaciones_software") or []
+    )
+
+    return {
+        "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
+        "procesador_status": result.get("status"),
+        "tamano_bytes": result.get("tamano_bytes"),
+        "encabezados_originales_json": json_dumps_safe(result.get("encabezados_originales")),
+        "encabezados_normalizados_json": json_dumps_safe(
+            result.get("encabezados_normalizados")
+        ),
+        "casos_detectados": total_rows,
+        "notificaciones_detectadas": total_rows,
+        "estado_proceso": "PROCESADO"
+        if result.get("status") == "OK"
+        else "ERROR_PROCESAMIENTO",
+        "fecha_fin_proceso": utc_now_iso(),
+    }
+
+
 def prepare_estructura_hoja_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
 
@@ -284,6 +374,226 @@ def prepare_estructura_hoja_rows(id_archivo: int, result: dict[str, Any]) -> lis
         mapped_row["id_archivo"] = id_archivo
         mapped_row["fecha_creacion"] = utc_now_iso()
         rows.append(mapped_row)
+
+    return rows
+
+
+def _nombre_paciente_from_calificacion(source_row: dict[str, Any]) -> str | None:
+    return clean_text(
+        " ".join(
+            value
+            for value in (
+                clean_text(source_row.get("primer_nombre")),
+                clean_text(source_row.get("segundo_nombre")),
+                clean_text(source_row.get("primer_apellido")),
+                clean_text(source_row.get("segundo_apellido")),
+            )
+            if value
+        )
+    )
+
+
+def prepare_calificacion_sistema_caso_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+    seen_hashes = set()
+
+    for source_row in result.get("tabla_calificaciones_software") or []:
+        nombre_paciente = _nombre_paciente_from_calificacion(source_row)
+        numero_dictamen = source_row.get("numero_dictamen")
+
+        mapped_row = {
+            "id_archivo": id_archivo,
+            "numero_fila_excel": source_row.get("numero_fila_excel"),
+            "hoja_origen": source_row.get("hoja_origen"),
+            "sala": source_row.get("sala"),
+            "fecha_audiencia": normalize_date(source_row.get("fecha_dictamen")),
+            "numero_dictamen": numero_dictamen,
+            "numero_dictamen_normalizado": normalize_radicado(numero_dictamen),
+            "numero_radicado": source_row.get("radicado"),
+            "numero_radicado_normalizado": normalize_radicado(source_row.get("radicado")),
+            "fecha_radicado": normalize_date(source_row.get("fecha_radicado")),
+            "entidad_remitente": source_row.get("solicitante"),
+            "entidad_remitente_normalizado": normalize_db_string(
+                source_row.get("solicitante")
+            ),
+            "regional": source_row.get("primera_instancia"),
+            "regional_normalizado": normalize_db_string(source_row.get("primera_instancia")),
+            "tipo_identificacion": source_row.get("tipo_identificacion"),
+            "cedula": source_row.get("identificacion"),
+            "cedula_normalizada": normalize_document(source_row.get("identificacion")),
+            "nombre_paciente": nombre_paciente,
+            "nombre_paciente_normalizado": normalize_db_string(nombre_paciente),
+            "arl": source_row.get("arl"),
+            "arl_normalizado": normalize_db_string(source_row.get("arl")),
+            "eps": source_row.get("eps"),
+            "eps_normalizado": normalize_db_string(source_row.get("eps")),
+            "afp": source_row.get("afp"),
+            "afp_normalizado": normalize_db_string(source_row.get("afp")),
+            "compania_seguros": source_row.get("compania_seguros"),
+            "compania_seguros_normalizado": normalize_db_string(
+                source_row.get("compania_seguros")
+            ),
+            "empresa_contratante": source_row.get("empresa_contratante"),
+            "medico_ponente": source_row.get("calificador"),
+            "medico_ponente_normalizado": normalize_db_string(source_row.get("calificador")),
+            "terapeuta_psicologa": source_row.get("calificador_alterno_1"),
+            "terapeuta_psicologa_normalizado": normalize_db_string(
+                source_row.get("calificador_alterno_1")
+            ),
+            "medico_principal": source_row.get("calificador_alterno_2"),
+            "medico_principal_normalizado": normalize_db_string(
+                source_row.get("calificador_alterno_2")
+            ),
+            "numero_acta_audiencia": source_row.get("numero_acta_de_audiencia"),
+            "fecha_ejecutoria": normalize_date(source_row.get("fecha_ejecutoria")),
+            "estado_solicitud": source_row.get("estado_solicitud"),
+            "fecha_reactivacion": normalize_date(source_row.get("fecha_reactivacion")),
+            "activo": 1,
+            "fecha_creacion": utc_now_iso(),
+        }
+
+        hash_payload = business_hash_payload(
+            mapped_row,
+            {
+                "id_archivo",
+                "hash_calificacion_sistema_caso",
+                "activo",
+                "fecha_creacion",
+                "fecha_actualizacion",
+            },
+        )
+        mapped_row["hash_calificacion_sistema_caso"] = sha256_dict(hash_payload)
+        if mapped_row["hash_calificacion_sistema_caso"] in seen_hashes:
+            continue
+
+        seen_hashes.add(mapped_row["hash_calificacion_sistema_caso"])
+        mapped_row = truncate_text_fields(mapped_row, CALIFICACION_SISTEMA_CASO_MAX_LENGTHS)
+        rows.append(mapped_row)
+
+    return rows
+
+
+def _calificacion_envio_source_rows(source_row: dict[str, Any]) -> list[dict[str, Any]]:
+    nombre_paciente = _nombre_paciente_from_calificacion(source_row)
+    return [
+        {
+            "tipo_entidad": "PACIENTE",
+            "nombre_entidad": nombre_paciente,
+            "correo_reportado": source_row.get("correo"),
+            "numero_notificacion_reportado": source_row.get("numero_notificacion_paciente"),
+            "fecha_notificacion_reportada": normalize_date(
+                source_row.get("fecha_notificacion_paciente")
+            ),
+        },
+        {
+            "tipo_entidad": "REMITENTE",
+            "nombre_entidad": source_row.get("solicitante"),
+            "correo_reportado": source_row.get("correo_solicitante"),
+            "numero_notificacion_reportado": None,
+            "fecha_notificacion_reportada": normalize_date(
+                source_row.get("fecha_notificacion_solicitante")
+            ),
+        },
+        {
+            "tipo_entidad": "EPS",
+            "nombre_entidad": source_row.get("eps"),
+            "correo_reportado": source_row.get("correo_eps"),
+            "numero_notificacion_reportado": None,
+            "fecha_notificacion_reportada": None,
+        },
+        {
+            "tipo_entidad": "ARL",
+            "nombre_entidad": source_row.get("arl"),
+            "correo_reportado": source_row.get("correo_arl"),
+            "numero_notificacion_reportado": None,
+            "fecha_notificacion_reportada": None,
+        },
+    ]
+
+
+def prepare_calificacion_sistema_envio_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+    caso_id_by_hash: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    rows = []
+    seen_hashes = set()
+
+    for source_row in result.get("tabla_calificaciones_software") or []:
+        case_rows = prepare_calificacion_sistema_caso_rows(
+            id_archivo,
+            {"tabla_calificaciones_software": [source_row]},
+        )
+        if not case_rows:
+            continue
+
+        case_row = case_rows[0]
+        case_hash = case_row.get("hash_calificacion_sistema_caso")
+        id_calificacion_sistema_caso = (
+            caso_id_by_hash.get(case_hash) if caso_id_by_hash else None
+        )
+
+        for envio_source in _calificacion_envio_source_rows(source_row):
+            if not any(
+                envio_source.get(field_name)
+                for field_name in (
+                    "nombre_entidad",
+                    "correo_reportado",
+                    "numero_notificacion_reportado",
+                    "fecha_notificacion_reportada",
+                )
+            ):
+                continue
+
+            correo_reportado = clean_text(envio_source.get("correo_reportado"))
+            mapped_row = {
+                "id_calificacion_sistema_caso": id_calificacion_sistema_caso,
+                "id_archivo": id_archivo,
+                "numero_fila_excel": source_row.get("numero_fila_excel"),
+                "numero_radicado_normalizado": case_row.get("numero_radicado_normalizado"),
+                "cedula_normalizada": case_row.get("cedula_normalizada"),
+                "tipo_entidad": envio_source.get("tipo_entidad"),
+                "nombre_entidad": envio_source.get("nombre_entidad"),
+                "nombre_entidad_normalizado": normalize_db_string(
+                    envio_source.get("nombre_entidad")
+                ),
+                "correo_reportado": correo_reportado,
+                "correo_normalizado": normalize_email(correo_reportado),
+                "numero_notificacion_reportado": envio_source.get(
+                    "numero_notificacion_reportado"
+                ),
+                "fecha_notificacion_reportada": envio_source.get(
+                    "fecha_notificacion_reportada"
+                ),
+                "fuente_dato": "CALIFICACIONES_SOFTWARE",
+                "activo": 1,
+                "fecha_creacion": utc_now_iso(),
+            }
+
+            hash_payload = business_hash_payload(
+                mapped_row,
+                {
+                    "id_calificacion_sistema_caso",
+                    "id_archivo",
+                    "hash_calificacion_sistema_envio",
+                    "activo",
+                    "fecha_creacion",
+                    "fecha_actualizacion",
+                },
+            )
+            mapped_row["hash_calificacion_sistema_envio"] = sha256_dict(hash_payload)
+            if mapped_row["hash_calificacion_sistema_envio"] in seen_hashes:
+                continue
+
+            seen_hashes.add(mapped_row["hash_calificacion_sistema_envio"])
+            mapped_row = truncate_text_fields(
+                mapped_row,
+                CALIFICACION_SISTEMA_ENVIO_MAX_LENGTHS,
+            )
+            rows.append(mapped_row)
 
     return rows
 
@@ -318,6 +628,7 @@ def prepare_caso_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str,
             continue
 
         seen_hashes.add(mapped_row["hash_caso"])
+        mapped_row = truncate_text_fields(mapped_row, CASO_MAX_LENGTHS)
         rows.append(mapped_row)
 
     return rows
@@ -747,6 +1058,31 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
             ),
         ]
 
+    if source_key == "CALIFICACIONES_SOFTWARE":
+        rows = result.get("tabla_calificaciones_software") or []
+        total_rows = result.get("total_filas_calificaciones_software") or len(rows)
+
+        return [
+            _regla_row(
+                id_archivo,
+                "LEER_XLSX_CALIFICACIONES_SOFTWARE",
+                "LECTURA",
+                total_rows,
+                total_rows,
+                status,
+                "Lectura de export de calificaciones del software",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLAS_CALIFICACION_SISTEMA",
+                "TRANSFORMACION",
+                len(rows),
+                len(rows),
+                status,
+                "Preparacion de casos canonicos y envios por entidad del software",
+            ),
+        ]
+
     raise ValueError(f"source no soportado: {source}")
 
 
@@ -812,5 +1148,31 @@ def prepare_all_from_guias_result(id_archivo: int, result: dict[str, Any]) -> di
             id_archivo,
             result,
             "GUIAS_CORREO_FISICO",
+        ),
+    }
+
+
+def prepare_all_from_calificaciones_result(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "jnc.etl_archivo_cargado": prepare_archivo_update_from_calificaciones_result(
+            id_archivo,
+            result,
+        ),
+        "jnc.calificacion_sistema_caso": prepare_calificacion_sistema_caso_rows(
+            id_archivo,
+            result,
+        ),
+        "jnc.calificacion_sistema_envio_entidad": prepare_calificacion_sistema_envio_rows(
+            id_archivo,
+            result,
+        ),
+        "jnc.etl_error_procesamiento": prepare_error_rows(id_archivo, result),
+        "jnc.etl_ejecucion_regla": prepare_regla_rows(
+            id_archivo,
+            result,
+            "CALIFICACIONES_SOFTWARE",
         ),
     }

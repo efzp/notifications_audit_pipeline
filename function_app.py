@@ -10,10 +10,12 @@ import azure.functions as func
 
 import procesador
 import procesador_audiencias
+import procesador_calificaciones
 import procesador_correo
 import procesador_guias
 from src.load import db
 from src.load.write_audiencias import write_audiencias_result_to_sql
+from src.load.write_calificaciones import write_calificaciones_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_guias import write_guias_result_to_sql
 from src.load.write_salas import write_salas_result_to_sql
@@ -374,6 +376,26 @@ def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
         "procesar_guias_correo_fisico",
         procesador_guias.process_payload_data,
         write_guias_result_to_sql,
+    )
+
+
+@app.route(route="procesar_calificaciones_software", methods=["POST"])
+def procesar_calificaciones_software(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_calificaciones_software",
+        procesador_calificaciones.process_payload_data,
+        write_calificaciones_result_to_sql,
+    )
+
+
+@app.route(route="procesar_sistema_jnc", methods=["POST"])
+def procesar_sistema_jnc(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_sistema_jnc",
+        procesador_calificaciones.process_payload_data,
+        write_calificaciones_result_to_sql,
     )
 
 

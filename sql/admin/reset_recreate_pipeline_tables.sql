@@ -39,6 +39,8 @@ WHERE fk.referenced_object_id IN (
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
+    OBJECT_ID('jnc.calificacion_sistema_envio_entidad'),
+    OBJECT_ID('jnc.calificacion_sistema_caso'),
     OBJECT_ID('jnc.audiencia_caso'),
     OBJECT_ID('jnc.etl_estructura_acta'),
     OBJECT_ID('jnc.caso_calificado'),
@@ -52,6 +54,8 @@ OR fk.parent_object_id IN (
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
+    OBJECT_ID('jnc.calificacion_sistema_envio_entidad'),
+    OBJECT_ID('jnc.calificacion_sistema_caso'),
     OBJECT_ID('jnc.audiencia_caso'),
     OBJECT_ID('jnc.etl_estructura_acta'),
     OBJECT_ID('jnc.caso_calificado'),
@@ -70,6 +74,8 @@ DROP TABLE IF EXISTS jnc.resumen_validacion_radicado;
 DROP TABLE IF EXISTS jnc.resultado_cruce_notificacion;
 DROP TABLE IF EXISTS jnc.notificacion_esperada;
 DROP TABLE IF EXISTS jnc.notificacion_correo_certificado;
+DROP TABLE IF EXISTS jnc.calificacion_sistema_envio_entidad;
+DROP TABLE IF EXISTS jnc.calificacion_sistema_caso;
 DROP TABLE IF EXISTS jnc.audiencia_caso;
 DROP TABLE IF EXISTS jnc.etl_estructura_acta;
 DROP TABLE IF EXISTS jnc.caso_calificado;
@@ -211,6 +217,81 @@ CREATE TABLE jnc.notificacion_correo_certificado (
     hash_correo NVARCHAR(64) NULL,
     fecha_creacion DATETIME2(0) NOT NULL
         CONSTRAINT DF_notificacion_correo_fecha_creacion DEFAULT (SYSUTCDATETIME())
+);
+
+CREATE TABLE jnc.calificacion_sistema_caso (
+    id_calificacion_sistema_caso BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_calificacion_sistema_caso PRIMARY KEY,
+    id_archivo INT NOT NULL,
+    numero_fila_excel INT NULL,
+    hoja_origen NVARCHAR(255) NULL,
+    schema_version INT NOT NULL
+        CONSTRAINT DF_calificacion_sistema_caso_schema_version DEFAULT (1),
+    sala NVARCHAR(255) NULL,
+    fecha_audiencia DATE NULL,
+    numero_dictamen NVARCHAR(100) NULL,
+    numero_dictamen_normalizado NVARCHAR(100) NULL,
+    numero_radicado NVARCHAR(100) NULL,
+    numero_radicado_normalizado NVARCHAR(100) NULL,
+    fecha_radicado DATE NULL,
+    entidad_remitente NVARCHAR(500) NULL,
+    entidad_remitente_normalizado NVARCHAR(500) NULL,
+    regional NVARCHAR(500) NULL,
+    regional_normalizado NVARCHAR(500) NULL,
+    tipo_identificacion NVARCHAR(50) NULL,
+    cedula NVARCHAR(50) NULL,
+    cedula_normalizada NVARCHAR(50) NULL,
+    nombre_paciente NVARCHAR(500) NULL,
+    nombre_paciente_normalizado NVARCHAR(500) NULL,
+    arl NVARCHAR(300) NULL,
+    arl_normalizado NVARCHAR(500) NULL,
+    eps NVARCHAR(300) NULL,
+    eps_normalizado NVARCHAR(500) NULL,
+    afp NVARCHAR(300) NULL,
+    afp_normalizado NVARCHAR(500) NULL,
+    compania_seguros NVARCHAR(300) NULL,
+    compania_seguros_normalizado NVARCHAR(500) NULL,
+    empresa_contratante NVARCHAR(500) NULL,
+    medico_ponente NVARCHAR(255) NULL,
+    medico_ponente_normalizado NVARCHAR(500) NULL,
+    terapeuta_psicologa NVARCHAR(255) NULL,
+    terapeuta_psicologa_normalizado NVARCHAR(500) NULL,
+    medico_principal NVARCHAR(255) NULL,
+    medico_principal_normalizado NVARCHAR(500) NULL,
+    numero_acta_audiencia NVARCHAR(100) NULL,
+    fecha_ejecutoria DATE NULL,
+    estado_solicitud NVARCHAR(255) NULL,
+    fecha_reactivacion DATE NULL,
+    hash_calificacion_sistema_caso NVARCHAR(64) NULL,
+    activo BIT NOT NULL
+        CONSTRAINT DF_calificacion_sistema_caso_activo DEFAULT (1),
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_calificacion_sistema_caso_fecha_creacion DEFAULT (SYSUTCDATETIME()),
+    fecha_actualizacion DATETIME2(0) NULL
+);
+
+CREATE TABLE jnc.calificacion_sistema_envio_entidad (
+    id_calificacion_sistema_envio BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_calificacion_sistema_envio_entidad PRIMARY KEY,
+    id_calificacion_sistema_caso BIGINT NULL,
+    id_archivo INT NOT NULL,
+    numero_fila_excel INT NULL,
+    numero_radicado_normalizado NVARCHAR(100) NULL,
+    cedula_normalizada NVARCHAR(50) NULL,
+    tipo_entidad NVARCHAR(100) NOT NULL,
+    nombre_entidad NVARCHAR(500) NULL,
+    nombre_entidad_normalizado NVARCHAR(500) NULL,
+    correo_reportado NVARCHAR(1000) NULL,
+    correo_normalizado NVARCHAR(1000) NULL,
+    numero_notificacion_reportado NVARCHAR(100) NULL,
+    fecha_notificacion_reportada DATE NULL,
+    fuente_dato NVARCHAR(100) NOT NULL,
+    hash_calificacion_sistema_envio NVARCHAR(64) NULL,
+    activo BIT NOT NULL
+        CONSTRAINT DF_calificacion_sistema_envio_activo DEFAULT (1),
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_calificacion_sistema_envio_fecha_creacion DEFAULT (SYSUTCDATETIME()),
+    fecha_actualizacion DATETIME2(0) NULL
 );
 
 CREATE TABLE jnc.etl_estructura_acta (
@@ -483,6 +564,52 @@ INCLUDE (
     numero_linea_csv,
     estado_correo
 );
+
+ALTER TABLE jnc.calificacion_sistema_envio_entidad
+ADD CONSTRAINT FK_calificacion_sistema_envio_caso
+    FOREIGN KEY (id_calificacion_sistema_caso)
+    REFERENCES jnc.calificacion_sistema_caso (id_calificacion_sistema_caso);
+
+CREATE INDEX IX_calificacion_sistema_caso_radicado
+ON jnc.calificacion_sistema_caso (
+    numero_radicado_normalizado,
+    cedula_normalizada,
+    activo
+)
+INCLUDE (
+    fecha_audiencia,
+    numero_dictamen,
+    entidad_remitente,
+    regional,
+    estado_solicitud
+);
+
+CREATE UNIQUE INDEX UX_calificacion_sistema_caso_archivo_hash
+ON jnc.calificacion_sistema_caso (
+    id_archivo,
+    hash_calificacion_sistema_caso
+)
+WHERE hash_calificacion_sistema_caso IS NOT NULL;
+
+CREATE INDEX IX_calificacion_sistema_envio_busqueda
+ON jnc.calificacion_sistema_envio_entidad (
+    tipo_entidad,
+    correo_normalizado,
+    numero_radicado_normalizado,
+    activo
+)
+INCLUDE (
+    id_calificacion_sistema_caso,
+    cedula_normalizada,
+    fecha_notificacion_reportada
+);
+
+CREATE UNIQUE INDEX UX_calificacion_sistema_envio_archivo_hash
+ON jnc.calificacion_sistema_envio_entidad (
+    id_archivo,
+    hash_calificacion_sistema_envio
+)
+WHERE hash_calificacion_sistema_envio IS NOT NULL;
 
 CREATE INDEX IX_etl_estructura_acta_archivo
 ON jnc.etl_estructura_acta (
