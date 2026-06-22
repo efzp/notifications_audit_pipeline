@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.load import db
@@ -13,15 +13,27 @@ from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 from src.utils.normalization import normalize_date
 
 
+def _as_date(value: Any) -> date | None:
+    normalized = normalize_date(value)
+    if normalized is None:
+        return None
+    if isinstance(normalized, date):
+        return normalized
+    try:
+        return datetime.fromisoformat(str(normalized)).date()
+    except ValueError:
+        return None
+
+
 def _affected_reference_window(
     rows: list[dict[str, Any]],
     date_fields: tuple[str, ...],
     margin_days: int,
-) -> tuple[Any, Any] | None:
+) -> tuple[date, date] | None:
     dates = []
     for row in rows:
         for field_name in date_fields:
-            value = normalize_date(row.get(field_name))
+            value = _as_date(row.get(field_name))
             if value is not None:
                 dates.append(value)
     if not dates:
