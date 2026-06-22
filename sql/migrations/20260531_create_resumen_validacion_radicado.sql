@@ -143,6 +143,7 @@ BEGIN
     notificacion_estado AS (
         SELECT
             ne.id_caso,
+            ne.id_calificacion_sistema_caso,
             ne.id_notificacion_esperada,
             UPPER(COALESCE(ne.tipo_destinatario, 'SIN_TIPO_DESTINATARIO')) AS tipo_destinatario,
             COALESCE(
@@ -196,7 +197,20 @@ BEGIN
             CASE WHEN MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'CUMPLE' THEN 1 ELSE 0 END) = 0 AND MAX(CASE WHEN ne.tipo_destinatario = 'ASEGURADORAS' AND ne.estado_revision_notificacion = 'FUERA_DE_PLAZO' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS condicion_aseguradoras_extemporaneo
         FROM caso_base AS cc
         LEFT JOIN notificacion_estado AS ne
-            ON ne.id_caso = cc.id_caso
+            ON (
+                ne.id_caso = cc.id_caso
+                OR (
+                    ne.id_caso IS NULL
+                    AND
+                    ne.id_calificacion_sistema_caso IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM jnc.calificacion_sistema_caso AS csc
+                        WHERE csc.id_calificacion_sistema_caso = ne.id_calificacion_sistema_caso
+                          AND csc.numero_radicado_normalizado = cc.numero_radicado_normalizado
+                    )
+                )
+            )
         GROUP BY
             cc.id_caso,
             cc.numero_radicado,
@@ -247,6 +261,7 @@ BEGIN
                     rcn.id_resultado_cruce,
                     rcn.id_notificacion_esperada,
                     rcn.id_caso,
+                    rcn.id_calificacion_sistema_caso,
                     rcn.id_archivo,
                     rcn.numero_radicado,
                     rcn.numero_radicado_normalizado,

@@ -97,6 +97,21 @@ CALIFICACION_SISTEMA_ENVIO_MAX_LENGTHS = {
     "hash_calificacion_sistema_envio": 64,
 }
 
+ARL_RADICADO_MAX_LENGTHS = {
+    "arl_detectada": 100,
+    "arl_normalizada": 100,
+    "remitente_detectado": 500,
+    "cedula_detectada": 50,
+    "cedula_normalizada": 50,
+    "metodo_deteccion_arl": 100,
+    "metodo_deteccion_cedula": 100,
+    "metodo_deteccion_fecha": 100,
+    "nombre_archivo": 500,
+    "ruta_sharepoint": 1000,
+    "identifier": 1000,
+    "hash_arl_radicado": 64,
+}
+
 GUIA_CORREO_FISICO_DATE_FIELDS = {
     "fec_captura",
     "fec_entrega",
@@ -236,10 +251,29 @@ def prepare_archivo_update_from_salas_result(id_archivo: int, result: dict[str, 
     hojas = result.get("hojas_con_fecha") or []
     mensaje_error = result.get("mensaje_error") or []
     hojas_validas = sum(1 for hoja in hojas if hoja.get("estructura_valida"))
+    structure_payload = {
+        "diccionario_estandar_columnas": result.get("diccionario_estandar_columnas"),
+        "hojas": [
+            {
+                "pestana_nombre_normalizado": hoja.get("pestana_nombre_normalizado"),
+                "fila_encabezado_wide": hoja.get("fila_encabezado_wide"),
+                "fila_encabezado_detalle": hoja.get("fila_encabezado_detalle"),
+                "estructura_campos_encontrados": hoja.get("estructura_campos_encontrados"),
+                "estructura_campos_esperados": hoja.get("estructura_campos_esperados"),
+            }
+            for hoja in hojas
+        ],
+    }
 
     return {
         "id_archivo": id_archivo,
         **_prepare_archivo_identity_update(result),
+        "tipo_archivo_detectado": result.get("tipo_archivo_detectado")
+        or result.get("tipo_archivo")
+        or "SALAS",
+        "schema_version": result.get("schema_version") or 1,
+        "layout_version": result.get("layout_version") or result.get("modo_procesamiento"),
+        "hash_estructura_archivo": sha256_dict(structure_payload),
         "procesador_status": result.get("status"),
         "tamano_bytes": result.get("tamano_bytes"),
         "entradas_xlsx": result.get("entradas_xlsx"),
@@ -296,6 +330,29 @@ def prepare_archivo_update_from_audiencias_result(id_archivo: int, result: dict[
         "casos_detectados": total_casos,
         "estado_proceso": "PROCESADO"
         if result.get("status") == "OK"
+        else "ERROR_PROCESAMIENTO",
+        "fecha_fin_proceso": utc_now_iso(),
+    }
+
+
+def prepare_archivo_update_from_arls_result(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    total_rows = result.get("total_arls_radicado_pdf") or len(
+        result.get("tabla_arls_radicado_pdf") or []
+    )
+
+    return {
+        "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
+        "procesador_status": result.get("status"),
+        "tamano_bytes": result.get("tamano_bytes"),
+        "notificaciones_detectadas": result.get("notificaciones_detectadas") or total_rows,
+        "mensaje_error": json_dumps_safe(result.get("mensaje_error"))
+        if result.get("mensaje_error")
+        else None,
+        "estado_proceso": "PROCESADO"
+        if result.get("status") == "OK"
+        else "PROCESADO_CON_ALERTAS"
+        if result.get("status") == "OK_CON_ALERTAS"
         else "ERROR_PROCESAMIENTO",
         "fecha_fin_proceso": utc_now_iso(),
     }
@@ -638,6 +695,8 @@ def prepare_notificacion_rows(
     id_archivo: int,
     result: dict[str, Any],
     caso_id_by_radicado: dict[str, int] | None = None,
+    calificacion_caso_id_by_key: dict[tuple[str | None, str | None], int] | None = None,
+    fallback_correo_by_key: dict[tuple[int, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows = []
 
@@ -665,16 +724,69 @@ def prepare_notificacion_rows(
         mapped_row["correo_normalizado"] = (
             normalize_email(correo_o_guia) if correo_o_guia and "@" in correo_o_guia else None
         )
+        mapped_row["id_caso"] = None
+        mapped_row["id_calificacion_sistema_caso"] = None
+        mapped_row["id_calificacion_sistema_envio_fallback"] = None
+        mapped_row["fuente_correo_reportado"] = "INPUT_SALAS" if correo_o_guia else None
 
         if caso_id_by_radicado:
             mapped_row["id_caso"] = caso_id_by_radicado.get(
                 mapped_row["numero_radicado_normalizado"]
             )
+        if calificacion_caso_id_by_key:
+            mapped_row["id_calificacion_sistema_caso"] = (
+                calificacion_caso_id_by_key.get(
+                    (
+                        mapped_row["numero_radicado_normalizado"],
+                        mapped_row["cedula_normalizada"],
+                    )
+                )
+                or calificacion_caso_id_by_key.get(
+                    (mapped_row["numero_radicado_normalizado"], None)
+                )
+            )
+        if (
+            not mapped_row.get("correo_normalizado")
+            and mapped_row.get("id_calificacion_sistema_caso")
+            and fallback_correo_by_key
+        ):
+            fallback = fallback_correo_by_key.get(
+                (
+                    mapped_row["id_calificacion_sistema_caso"],
+                    mapped_row.get("tipo_destinatario") or "",
+                )
+            )
+            if fallback:
+                fallback_email = clean_text(fallback.get("correo_reportado"))
+                mapped_row["correo_o_guia_reportado"] = (
+                    mapped_row.get("correo_o_guia_reportado") or fallback_email
+                )
+                mapped_row["correo_normalizado"] = fallback.get("correo_normalizado")
+                mapped_row["fuente_correo_reportado"] = "CALIFICACION_SISTEMA_ENVIO"
+                mapped_row["id_calificacion_sistema_envio_fallback"] = fallback.get(
+                    "id_calificacion_sistema_envio"
+                )
 
         mapped_row["tabla_notificacion_json"] = json_dumps_safe(source_row)
         mapped_row["origen_tabla"] = source_row.get("origen_tabla") or "tabla_notificaciones"
         mapped_row["activo"] = 1
         mapped_row["fecha_creacion"] = utc_now_iso()
+        mapped_row["hash_negocio_notificacion"] = sha256_dict(
+            {
+                "id_calificacion_sistema_caso": mapped_row.get(
+                    "id_calificacion_sistema_caso"
+                ),
+                "numero_radicado_normalizado": mapped_row.get(
+                    "numero_radicado_normalizado"
+                ),
+                "cedula_normalizada": mapped_row.get("cedula_normalizada"),
+                "tipo_destinatario": mapped_row.get("tipo_destinatario"),
+                "correo_o_guia_reportado": clean_text(
+                    mapped_row.get("correo_o_guia_reportado")
+                ),
+                "correo_normalizado": mapped_row.get("correo_normalizado"),
+            }
+        )
 
         hash_payload = {
             key: value
@@ -828,6 +940,69 @@ def prepare_audiencia_caso_rows(
         )
         mapped_row["hash_audiencia_caso"] = sha256_dict(hash_payload)
         rows.append(mapped_row)
+
+    return rows
+
+
+def prepare_arl_radicado_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for source_row in result.get("tabla_arls_radicado_pdf") or []:
+        hash_payload = {
+            "arl_normalizada": source_row.get("arl_normalizada"),
+            "cedula_normalizada": source_row.get("cedula_normalizada"),
+            "fecha_recibo_comunicacion": normalize_date(
+                source_row.get("fecha_recibo_comunicacion")
+            ),
+            "nombre_archivo": source_row.get("nombre_archivo"),
+        }
+        mapped_row = {
+            "id_archivo": id_archivo,
+            "arl_detectada": clean_text(source_row.get("arl_detectada")),
+            "arl_normalizada": normalize_db_string(
+                source_row.get("arl_normalizada")
+                or source_row.get("arl_detectada")
+            ),
+            "remitente_detectado": clean_text(source_row.get("remitente_detectado")),
+            "cedula_detectada": clean_text(source_row.get("cedula_detectada")),
+            "cedula_normalizada": normalize_document(
+                source_row.get("cedula_normalizada")
+                or source_row.get("cedula_detectada")
+            ),
+            "fecha_recibo_comunicacion": normalize_date(
+                source_row.get("fecha_recibo_comunicacion")
+            ),
+            "hora_recibo_comunicacion": source_row.get("hora_recibo_comunicacion"),
+            "fecha_correo": normalize_date(source_row.get("fecha_correo")),
+            "hora_correo": source_row.get("hora_correo"),
+            "metodo_deteccion_arl": clean_text(source_row.get("metodo_deteccion_arl")),
+            "metodo_deteccion_cedula": clean_text(
+                source_row.get("metodo_deteccion_cedula")
+            ),
+            "metodo_deteccion_fecha": clean_text(
+                source_row.get("metodo_deteccion_fecha")
+            ),
+            "confianza_arl": source_row.get("confianza_arl"),
+            "confianza_cedula": source_row.get("confianza_cedula"),
+            "confianza_fecha": source_row.get("confianza_fecha"),
+            "nombre_archivo": clean_text(
+                source_row.get("nombre_archivo") or result.get("nombre_archivo")
+            ),
+            "ruta_sharepoint": clean_text(
+                source_row.get("ruta_sharepoint") or result.get("ruta_sharepoint")
+            ),
+            "identifier": clean_text(source_row.get("identifier")),
+            "numero_paginas": source_row.get("numero_paginas"),
+            "texto_patrones_json": json_dumps_safe(
+                source_row.get("texto_patrones_json")
+            ),
+            "metadata_pdf_json": json_dumps_safe(source_row.get("metadata_pdf_json")),
+            "fila_arl_radicado_json": json_dumps_safe(source_row),
+            "hash_arl_radicado": source_row.get("hash_arl_radicado")
+            or sha256_dict(hash_payload),
+            "activo": 1,
+            "fecha_creacion": utc_now_iso(),
+        }
+        rows.append(truncate_text_fields(mapped_row, ARL_RADICADO_MAX_LENGTHS))
 
     return rows
 

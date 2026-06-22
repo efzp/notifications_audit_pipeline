@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Any
 
 from src.load import db
@@ -9,6 +10,24 @@ from src.load.prepare_sql_rows import (
 )
 from src.load.timing import timed_step
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
+from src.utils.normalization import normalize_date
+
+
+def _affected_reference_window(
+    rows: list[dict[str, Any]],
+    date_fields: tuple[str, ...],
+    margin_days: int,
+) -> tuple[Any, Any] | None:
+    dates = []
+    for row in rows:
+        for field_name in date_fields:
+            value = normalize_date(row.get(field_name))
+            if value is not None:
+                dates.append(value)
+    if not dates:
+        return None
+
+    return min(dates) - timedelta(days=margin_days), max(dates) + timedelta(days=margin_days)
 
 
 def write_guias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
@@ -109,14 +128,27 @@ def write_guias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         )
 
         if result.get("status") == "OK":
-            summary["cruce_notificaciones"] = timed_step(
-                timings,
-                "recalcular_cruce_notificaciones",
-                lambda: recalcular_cruce_notificaciones(
-                    id_archivo_salas=None,
-                    solo_pendientes=False,
-                ),
+            affected_window = _affected_reference_window(
+                guia_rows,
+                ("fec_entrega", "fecha_entrega"),
+                30,
             )
+            if affected_window:
+                summary["cruce_notificaciones"] = timed_step(
+                    timings,
+                    "recalcular_cruce_notificaciones",
+                    lambda: recalcular_cruce_notificaciones(
+                        id_archivo_salas=None,
+                        solo_pendientes=False,
+                        fecha_referencia_desde=affected_window[0],
+                        fecha_referencia_hasta=affected_window[1],
+                    ),
+                )
+            else:
+                summary["cruce_notificaciones"] = {
+                    "omitido": True,
+                    "motivo": "No se detectaron fechas de entrega en las guias cargadas",
+                }
 
         if result.get("status") != "OK":
             summary["status"] = "ERROR"

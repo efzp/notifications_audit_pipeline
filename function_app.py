@@ -10,11 +10,13 @@ import azure.functions as func
 
 import procesador
 import procesador_audiencias
+import procesador_arls
 import procesador_calificaciones
 import procesador_correo
 import procesador_guias
 from src.load import db
 from src.load.write_audiencias import write_audiencias_result_to_sql
+from src.load.write_arls import write_arls_result_to_sql
 from src.load.write_calificaciones import write_calificaciones_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_guias import write_guias_result_to_sql
@@ -376,6 +378,16 @@ def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
         "procesar_guias_correo_fisico",
         procesador_guias.process_payload_data,
         write_guias_result_to_sql,
+    )
+
+
+@app.route(route="procesar_arls_radicado_pdf", methods=["POST"])
+def procesar_arls_radicado_pdf(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_arls_radicado_pdf",
+        procesador_arls.process_payload_data,
+        write_arls_result_to_sql,
     )
 
 

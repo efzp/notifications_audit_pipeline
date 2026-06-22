@@ -36,8 +36,10 @@ SELECT @drop_fk_sql = STRING_AGG(
 FROM sys.foreign_keys AS fk
 WHERE fk.referenced_object_id IN (
     OBJECT_ID('jnc.resumen_validacion_radicado'),
+    OBJECT_ID('jnc.cruce_notificacion_pendiente'),
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
+    OBJECT_ID('jnc.notificacion_arl_radicado'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
     OBJECT_ID('jnc.calificacion_sistema_envio_entidad'),
     OBJECT_ID('jnc.calificacion_sistema_caso'),
@@ -51,8 +53,10 @@ WHERE fk.referenced_object_id IN (
 )
 OR fk.parent_object_id IN (
     OBJECT_ID('jnc.resumen_validacion_radicado'),
+    OBJECT_ID('jnc.cruce_notificacion_pendiente'),
     OBJECT_ID('jnc.resultado_cruce_notificacion'),
     OBJECT_ID('jnc.notificacion_esperada'),
+    OBJECT_ID('jnc.notificacion_arl_radicado'),
     OBJECT_ID('jnc.notificacion_correo_certificado'),
     OBJECT_ID('jnc.calificacion_sistema_envio_entidad'),
     OBJECT_ID('jnc.calificacion_sistema_caso'),
@@ -71,8 +75,10 @@ BEGIN
 END;
 
 DROP TABLE IF EXISTS jnc.resumen_validacion_radicado;
+DROP TABLE IF EXISTS jnc.cruce_notificacion_pendiente;
 DROP TABLE IF EXISTS jnc.resultado_cruce_notificacion;
 DROP TABLE IF EXISTS jnc.notificacion_esperada;
+DROP TABLE IF EXISTS jnc.notificacion_arl_radicado;
 DROP TABLE IF EXISTS jnc.notificacion_correo_certificado;
 DROP TABLE IF EXISTS jnc.calificacion_sistema_envio_entidad;
 DROP TABLE IF EXISTS jnc.calificacion_sistema_caso;
@@ -116,7 +122,11 @@ CREATE TABLE jnc.etl_archivo_cargado (
     encabezados_originales_json NVARCHAR(MAX) NULL,
     encabezados_normalizados_json NVARCHAR(MAX) NULL,
     total_filas_correo_certificado INT NULL,
-    total_actas_audiencia_pdf INT NULL
+    total_actas_audiencia_pdf INT NULL,
+    schema_version INT NULL,
+    layout_version NVARCHAR(50) NULL,
+    tipo_archivo_detectado NVARCHAR(100) NULL,
+    hash_estructura_archivo NVARCHAR(64) NULL
 );
 
 CREATE TABLE jnc.etl_estructura_hoja (
@@ -217,6 +227,40 @@ CREATE TABLE jnc.notificacion_correo_certificado (
     hash_correo NVARCHAR(64) NULL,
     fecha_creacion DATETIME2(0) NOT NULL
         CONSTRAINT DF_notificacion_correo_fecha_creacion DEFAULT (SYSUTCDATETIME())
+);
+
+CREATE TABLE jnc.notificacion_arl_radicado (
+    id_notificacion_arl_radicado BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_notificacion_arl_radicado PRIMARY KEY,
+    id_archivo INT NOT NULL,
+    arl_detectada NVARCHAR(100) NULL,
+    arl_normalizada NVARCHAR(100) NULL,
+    remitente_detectado NVARCHAR(500) NULL,
+    cedula_detectada NVARCHAR(50) NULL,
+    cedula_normalizada NVARCHAR(50) NULL,
+    fecha_recibo_comunicacion DATE NULL,
+    hora_recibo_comunicacion TIME(0) NULL,
+    fecha_correo DATE NULL,
+    hora_correo TIME(0) NULL,
+    metodo_deteccion_arl NVARCHAR(100) NULL,
+    metodo_deteccion_cedula NVARCHAR(100) NULL,
+    metodo_deteccion_fecha NVARCHAR(100) NULL,
+    confianza_arl DECIMAL(9,4) NULL,
+    confianza_cedula DECIMAL(9,4) NULL,
+    confianza_fecha DECIMAL(9,4) NULL,
+    nombre_archivo NVARCHAR(500) NULL,
+    ruta_sharepoint NVARCHAR(1000) NULL,
+    identifier NVARCHAR(1000) NULL,
+    numero_paginas INT NULL,
+    texto_patrones_json NVARCHAR(MAX) NULL,
+    metadata_pdf_json NVARCHAR(MAX) NULL,
+    fila_arl_radicado_json NVARCHAR(MAX) NULL,
+    hash_arl_radicado NVARCHAR(64) NULL,
+    activo BIT NOT NULL
+        CONSTRAINT DF_notificacion_arl_radicado_activo DEFAULT (1),
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_notificacion_arl_radicado_fecha_creacion DEFAULT (SYSUTCDATETIME()),
+    fecha_actualizacion DATETIME2(0) NULL
 );
 
 CREATE TABLE jnc.calificacion_sistema_caso (
@@ -365,6 +409,7 @@ CREATE TABLE jnc.notificacion_esperada (
     id_notificacion_esperada INT IDENTITY(1,1) NOT NULL
         CONSTRAINT PK_notificacion_esperada PRIMARY KEY,
     id_caso INT NULL,
+    id_calificacion_sistema_caso BIGINT NULL,
     id_archivo INT NOT NULL,
     numero_radicado NVARCHAR(100) NULL,
     numero_radicado_normalizado NVARCHAR(100) NULL,
@@ -384,6 +429,9 @@ CREATE TABLE jnc.notificacion_esperada (
     origen_tabla NVARCHAR(100) NULL,
     tabla_notificacion_json NVARCHAR(MAX) NULL,
     hash_notificacion_esperada NVARCHAR(64) NULL,
+    hash_negocio_notificacion NVARCHAR(64) NULL,
+    fuente_correo_reportado NVARCHAR(100) NULL,
+    id_calificacion_sistema_envio_fallback BIGINT NULL,
     activo BIT NOT NULL
         CONSTRAINT DF_notificacion_esperada_activo DEFAULT (1),
     fecha_creacion DATETIME2(0) NOT NULL
@@ -429,6 +477,7 @@ CREATE TABLE jnc.resultado_cruce_notificacion (
         CONSTRAINT PK_resultado_cruce_notificacion PRIMARY KEY,
     id_notificacion_esperada INT NOT NULL,
     id_caso INT NULL,
+    id_calificacion_sistema_caso BIGINT NULL,
     id_archivo INT NULL,
     numero_radicado NVARCHAR(100) NULL,
     numero_radicado_normalizado NVARCHAR(100) NULL,
@@ -437,6 +486,8 @@ CREATE TABLE jnc.resultado_cruce_notificacion (
     tipo_destinatario NVARCHAR(100) NULL,
     id_notificacion_correo_certificado_match INT NULL,
     id_archivo_correo_certificado_match INT NULL,
+    id_notificacion_arl_radicado_match BIGINT NULL,
+    id_archivo_arl_radicado_match INT NULL,
     numero_linea_csv_match INT NULL,
     estado_revision_notificacion NVARCHAR(100) NOT NULL,
     descripcion_revision NVARCHAR(500) NULL,
@@ -460,6 +511,8 @@ CREATE TABLE jnc.resultado_cruce_notificacion (
     distancia_correo INT NULL,
     correo_esperado NVARCHAR(320) NULL,
     correo_certificado NVARCHAR(320) NULL,
+    arl_esperada NVARCHAR(300) NULL,
+    arl_detectada NVARCHAR(100) NULL,
     fecha_audiencia DATE NULL,
     fecha_envio_certificado DATE NULL,
     dias_despues_audiencia INT NULL,
@@ -471,6 +524,33 @@ CREATE TABLE jnc.resultado_cruce_notificacion (
         CONSTRAINT DF_resultado_cruce_activo DEFAULT (1),
     fecha_creacion DATETIME2(0) NOT NULL
         CONSTRAINT DF_resultado_cruce_fecha_creacion DEFAULT (SYSUTCDATETIME()),
+    fecha_actualizacion DATETIME2(0) NULL
+);
+
+CREATE TABLE jnc.cruce_notificacion_pendiente (
+    id_cruce_notificacion_pendiente BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT PK_cruce_notificacion_pendiente PRIMARY KEY,
+    id_notificacion_esperada INT NOT NULL,
+    id_calificacion_sistema_caso BIGINT NULL,
+    id_caso INT NULL,
+    id_archivo INT NULL,
+    numero_radicado_normalizado NVARCHAR(100) NULL,
+    cedula_normalizada NVARCHAR(50) NULL,
+    tipo_destinatario NVARCHAR(100) NULL,
+    correo_o_guia_reportado NVARCHAR(500) NULL,
+    correo_normalizado NVARCHAR(320) NULL,
+    estado_revision_notificacion NVARCHAR(100) NOT NULL,
+    motivo_pendiente NVARCHAR(500) NULL,
+    prioridad INT NOT NULL
+        CONSTRAINT DF_cruce_notificacion_pendiente_prioridad DEFAULT (100),
+    requiere_auditoria_manual BIT NOT NULL
+        CONSTRAINT DF_cruce_notificacion_pendiente_manual DEFAULT (1),
+    fecha_ultima_revision DATETIME2(0) NULL,
+    hash_negocio_notificacion NVARCHAR(64) NULL,
+    activo BIT NOT NULL
+        CONSTRAINT DF_cruce_notificacion_pendiente_activo DEFAULT (1),
+    fecha_creacion DATETIME2(0) NOT NULL
+        CONSTRAINT DF_cruce_notificacion_pendiente_fecha_creacion DEFAULT (SYSUTCDATETIME()),
     fecha_actualizacion DATETIME2(0) NULL
 );
 
@@ -550,8 +630,38 @@ INCLUDE (
     correo_normalizado,
     hoja_trabajo_fecha_audiencia,
     id_caso,
+    id_calificacion_sistema_caso,
     id_archivo
 );
+
+CREATE INDEX IX_notificacion_esperada_calificacion_caso
+ON jnc.notificacion_esperada (
+    id_calificacion_sistema_caso,
+    activo
+)
+INCLUDE (
+    id_notificacion_esperada,
+    id_caso,
+    numero_radicado_normalizado,
+    cedula_normalizada,
+    tipo_destinatario,
+    estado_revision_notificacion
+);
+
+CREATE INDEX IX_notificacion_esperada_hash_negocio
+ON jnc.notificacion_esperada (
+    hash_negocio_notificacion,
+    activo
+)
+INCLUDE (
+    id_notificacion_esperada,
+    id_archivo,
+    numero_radicado_normalizado,
+    cedula_normalizada,
+    tipo_destinatario,
+    estado_revision_notificacion
+)
+WHERE hash_negocio_notificacion IS NOT NULL;
 
 CREATE INDEX IX_notificacion_correo_certificado_revision
 ON jnc.notificacion_correo_certificado (
@@ -563,6 +673,35 @@ INCLUDE (
     id_notificacion_correo,
     numero_linea_csv,
     estado_correo
+);
+
+CREATE INDEX IX_notificacion_arl_radicado_cedula_fecha
+ON jnc.notificacion_arl_radicado (
+    cedula_normalizada,
+    arl_normalizada,
+    fecha_recibo_comunicacion,
+    activo
+)
+INCLUDE (
+    id_notificacion_arl_radicado,
+    id_archivo,
+    arl_detectada,
+    fecha_correo,
+    metodo_deteccion_arl,
+    metodo_deteccion_fecha
+);
+
+CREATE INDEX IX_notificacion_arl_radicado_hash
+ON jnc.notificacion_arl_radicado (
+    hash_arl_radicado,
+    activo
+)
+INCLUDE (
+    id_notificacion_arl_radicado,
+    id_archivo,
+    cedula_normalizada,
+    arl_normalizada,
+    fecha_recibo_comunicacion
 );
 
 ALTER TABLE jnc.calificacion_sistema_envio_entidad
@@ -652,9 +791,45 @@ ON jnc.resultado_cruce_notificacion (
     fecha_revision
 );
 
+CREATE INDEX IX_resultado_cruce_calificacion_caso
+ON jnc.resultado_cruce_notificacion (
+    id_calificacion_sistema_caso,
+    activo
+)
+INCLUDE (
+    id_notificacion_esperada,
+    id_caso,
+    estado_revision_notificacion
+);
+
 CREATE INDEX IX_resultado_cruce_notificacion_match_correo
 ON jnc.resultado_cruce_notificacion (
     id_notificacion_correo_certificado_match
+);
+
+CREATE INDEX IX_resultado_cruce_notificacion_match_arl
+ON jnc.resultado_cruce_notificacion (
+    id_notificacion_arl_radicado_match
+)
+INCLUDE (
+    id_notificacion_esperada,
+    cedula_normalizada,
+    tipo_destinatario,
+    estado_revision_notificacion
+);
+
+CREATE INDEX IX_cruce_notificacion_pendiente_busqueda
+ON jnc.cruce_notificacion_pendiente (
+    activo,
+    estado_revision_notificacion,
+    numero_radicado_normalizado,
+    tipo_destinatario
+)
+INCLUDE (
+    id_notificacion_esperada,
+    id_calificacion_sistema_caso,
+    cedula_normalizada,
+    prioridad
 );
 
 CREATE UNIQUE INDEX UX_resultado_cruce_notificacion_activo

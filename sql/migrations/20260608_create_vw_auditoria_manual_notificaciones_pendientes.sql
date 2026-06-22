@@ -144,6 +144,7 @@ notificacion_estado AS (
     SELECT
         ne.id_notificacion_esperada,
         ne.id_caso,
+        ne.id_calificacion_sistema_caso,
         ne.id_archivo,
         ne.numero_radicado,
         ne.numero_radicado_normalizado,
@@ -170,6 +171,9 @@ notificaciones_pendientes AS (
     SELECT
         ne.*
     FROM notificacion_estado AS ne
+    INNER JOIN jnc.cruce_notificacion_pendiente AS cnp
+        ON cnp.id_notificacion_esperada = ne.id_notificacion_esperada
+       AND cnp.activo = 1
     INNER JOIN jnc.resumen_validacion_radicado AS rvr
         ON rvr.numero_radicado_normalizado = ne.numero_radicado_normalizado
     WHERE rvr.cumplimiento_total = 0
@@ -188,6 +192,7 @@ notificaciones_pendientes_priorizadas AS (
     SELECT
         base.id_notificacion_esperada,
         base.id_caso,
+        base.id_calificacion_sistema_caso,
         base.id_archivo,
         base.numero_radicado,
         base.numero_radicado_normalizado,
@@ -214,7 +219,12 @@ notificaciones_pendientes_priorizadas AS (
                             THEN 1
                         ELSE 0
                     END DESC,
-                    CASE WHEN np.id_caso = co.id_caso THEN 1 ELSE 0 END DESC,
+                    CASE
+                        WHEN np.id_caso = co.id_caso
+                          OR csc_notificacion.numero_radicado_normalizado = co.numero_radicado_normalizado
+                            THEN 1
+                        ELSE 0
+                    END DESC,
                     fecha_pestana.fecha_pestana_nombre DESC,
                     np.fecha_revision_notificacion DESC,
                     np.id_archivo DESC,
@@ -226,6 +236,8 @@ notificaciones_pendientes_priorizadas AS (
             ON co.numero_radicado_normalizado = np.numero_radicado_normalizado
         LEFT JOIN jnc.caso_calificado AS cc_notificacion
             ON cc_notificacion.id_caso = np.id_caso
+        LEFT JOIN jnc.calificacion_sistema_caso AS csc_notificacion
+            ON csc_notificacion.id_calificacion_sistema_caso = np.id_calificacion_sistema_caso
         OUTER APPLY (
             SELECT
                 COALESCE(
@@ -321,7 +333,8 @@ SELECT
     rvr.sala_acta,
     rvr.tiene_acta_audiencia,
     rvr.fecha_audiencia,
-    np.id_caso AS id_caso_notificacion
+    np.id_caso AS id_caso_notificacion,
+    np.id_calificacion_sistema_caso
 FROM notificaciones_pendientes_priorizadas AS np
 LEFT JOIN caso_oficial AS co
     ON co.numero_radicado_normalizado = np.numero_radicado_normalizado

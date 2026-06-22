@@ -1,45 +1,39 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.load import db
 from src.load.prepare_sql_rows import (
-    prepare_archivo_update_from_correo_result,
-    prepare_correo_certificado_rows,
+    prepare_archivo_update_from_arls_result,
+    prepare_arl_radicado_rows,
     prepare_error_rows,
     prepare_regla_rows,
 )
 from src.load.timing import timed_step
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
-from src.utils.normalization import normalize_date
 
 
-def _affected_reference_window(
-    rows: list[dict[str, Any]],
-    date_fields: tuple[str, ...],
-    margin_days: int,
-) -> tuple[Any, Any] | None:
-    dates = []
-    for row in rows:
-        for field_name in date_fields:
-            value = normalize_date(row.get(field_name))
-            if value is not None:
-                dates.append(value)
-    if not dates:
+def _as_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError:
         return None
 
-    return min(dates) - timedelta(days=margin_days), max(dates) + timedelta(days=margin_days)
 
-
-def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+def write_arls_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
-        "correos_insertados": 0,
+        "arls_radicado_insertados": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
-        "cruce_notificaciones": {},
         "timings": {},
-        "mensaje": "Resultado de correo certificado escrito en Azure SQL",
+        "mensaje": "Resultado de radicados ARL PDF escrito en Azure SQL",
     }
 
     def transaction():
@@ -55,11 +49,10 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
                 {"estado_proceso": "EN_PROCESO"},
             ),
         )
-
         timed_step(
             timings,
-            "delete_notificacion_correo_certificado",
-            lambda: db.delete_by_archivo("jnc.notificacion_correo_certificado", id_archivo),
+            "delete_notificacion_arl_radicado",
+            lambda: db.delete_by_archivo("jnc.notificacion_arl_radicado", id_archivo),
         )
         timed_step(
             timings,
@@ -72,11 +65,11 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
             lambda: db.delete_by_archivo("jnc.etl_ejecucion_regla", id_archivo),
         )
 
-        correo_rows = timed_step(
+        arl_rows = timed_step(
             timings,
-            "prepare_notificacion_correo_certificado",
-            lambda: prepare_correo_certificado_rows(id_archivo, result)
-            if result.get("status") == "OK"
+            "prepare_notificacion_arl_radicado",
+            lambda: prepare_arl_radicado_rows(id_archivo, result)
+            if result.get("status") in {"OK", "OK_CON_ALERTAS"}
             else [],
         )
         error_rows = timed_step(
@@ -87,13 +80,13 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
         regla_rows = timed_step(
             timings,
             "prepare_regla_rows",
-            lambda: prepare_regla_rows(id_archivo, result, "CORREO_CERTIFICADO"),
+            lambda: prepare_regla_rows(id_archivo, result, "ARL_RADICADO_PDF"),
         )
 
-        summary["correos_insertados"] = timed_step(
+        summary["arls_radicado_insertados"] = timed_step(
             timings,
-            "insert_notificacion_correo_certificado",
-            lambda: db.insert_many("jnc.notificacion_correo_certificado", correo_rows),
+            "insert_notificacion_arl_radicado",
+            lambda: db.insert_many("jnc.notificacion_arl_radicado", arl_rows),
         )
         summary["errores_insertados"] = timed_step(
             timings,
@@ -109,7 +102,7 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
         archivo_update = timed_step(
             timings,
             "prepare_archivo_update",
-            lambda: prepare_archivo_update_from_correo_result(id_archivo, result),
+            lambda: prepare_archivo_update_from_arls_result(id_archivo, result),
         )
         archivo_update.pop("id_archivo", None)
         timed_step(
@@ -123,32 +116,32 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
             ),
         )
 
-        if result.get("status") == "OK":
-            affected_window = _affected_reference_window(
-                correo_rows,
-                ("fecha", "fecha_2", "fecha_3"),
-                7,
-            )
-            if affected_window:
+        if result.get("status") != "OK":
+            summary["status"] = result.get("status") or "ERROR"
+            summary["mensaje"] = "Resultado de radicados ARL PDF escrito con alertas"
+
+        if arl_rows:
+            date_values = [
+                parsed_date
+                for row in arl_rows
+                if (
+                    parsed_date := _as_date(
+                        row.get("fecha_recibo_comunicacion") or row.get("fecha_correo")
+                    )
+                )
+            ]
+            if date_values:
+                min_date = min(date_values)
+                max_date = max(date_values)
                 summary["cruce_notificaciones"] = timed_step(
                     timings,
-                    "recalcular_cruce_notificaciones",
+                    "recalcular_cruce_notificaciones_arl",
                     lambda: recalcular_cruce_notificaciones(
-                        id_archivo_salas=None,
                         solo_pendientes=False,
-                        fecha_referencia_desde=affected_window[0],
-                        fecha_referencia_hasta=affected_window[1],
+                        fecha_referencia_desde=min_date - timedelta(days=30),
+                        fecha_referencia_hasta=max_date,
                     ),
                 )
-            else:
-                summary["cruce_notificaciones"] = {
-                    "omitido": True,
-                    "motivo": "No se detectaron fechas en el correo certificado cargado",
-                }
-
-        if result.get("status") != "OK":
-            summary["status"] = "ERROR"
-            summary["mensaje"] = "Resultado de correo certificado escrito con errores"
 
         return summary
 
