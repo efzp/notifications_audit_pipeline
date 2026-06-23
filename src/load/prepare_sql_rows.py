@@ -1054,17 +1054,28 @@ def prepare_error_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str
     rows = []
 
     for error in result.get("mensaje_error") or []:
+        if isinstance(error, dict):
+            tipo_error = error.get("tipo_error")
+            detalle_error = error.get("mensaje") or json_dumps_safe(error)
+            hoja_origen = error.get("pestana")
+            detalle_error_json = json_dumps_safe(error)
+        else:
+            tipo_error = "alerta_procesamiento"
+            detalle_error = str(error)
+            hoja_origen = None
+            detalle_error_json = json_dumps_safe({"mensaje": detalle_error})
+
         rows.append(
             {
                 "id_archivo": id_archivo,
                 "etapa": "VALIDACION_ESTRUCTURA",
-                "tipo_error": error.get("tipo_error"),
-                "detalle_error": error.get("mensaje") or json_dumps_safe(error),
-                "hoja_origen": error.get("pestana"),
+                "tipo_error": tipo_error,
+                "detalle_error": detalle_error,
+                "hoja_origen": hoja_origen,
                 "severidad": "ERROR",
                 "requiere_revision": 1,
                 "fecha_error": utc_now_iso(),
-                "detalle_error_json": json_dumps_safe(error),
+                "detalle_error_json": detalle_error_json,
             }
         )
 
