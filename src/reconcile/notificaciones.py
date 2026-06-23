@@ -38,6 +38,62 @@ CRUCE_VERSION = "1.0"
 CORREO_FECHA_VENTANA_DIAS = 7
 GUIA_MATCH_DIGITS = 9
 GUIA_ENVIA_MATCH_THRESHOLD = 0.8
+FUENTE_FULL = "FULL"
+FUENTE_CORREO = "CORREO_CERTIFICADO"
+FUENTE_GUIA = "GUIA_CORREO_FISICO"
+FUENTE_ARL = "ARL_RADICADO_PDF"
+FUENTES_CRUCE = {FUENTE_FULL, FUENTE_CORREO, FUENTE_GUIA, FUENTE_ARL}
+STATUS_RANK = {
+    ESTADO_CUMPLE: 50,
+    ESTADO_FUERA_DE_PLAZO: 40,
+    ESTADO_REQUIERE_REVISION: 30,
+    ESTADO_CORREO_NO_COINCIDE: 20,
+    ESTADO_ARL_NO_COINCIDE: 20,
+    ESTADO_GUIA_NO_COINCIDE_CEDULA: 20,
+    ESTADO_ASUNTO_NO_VALIDO: 20,
+    ESTADO_EVENTO_NO_VALIDO: 20,
+    ESTADO_DOCUMENTO_NO_ENCONTRADO: 10,
+    ESTADO_GUIA_NO_COINCIDE: 10,
+    ESTADO_NO_CRUZADO: 10,
+    "SIN_REVISION": 0,
+}
+
+
+def _normalize_fuente_cruce(value: Any) -> str:
+    if value in (None, ""):
+        return FUENTE_FULL
+
+    normalized = str(value).strip().upper()
+    aliases = {
+        "FULL": FUENTE_FULL,
+        "TODAS": FUENTE_FULL,
+        "TODO": FUENTE_FULL,
+        "CORREO": FUENTE_CORREO,
+        "CORREO_CERTIFICADO": FUENTE_CORREO,
+        "GUIA": FUENTE_GUIA,
+        "GUIAS": FUENTE_GUIA,
+        "GUIA_CORREO_FISICO": FUENTE_GUIA,
+        "GUIAS_CORREO_FISICO": FUENTE_GUIA,
+        "ARL": FUENTE_ARL,
+        "ARLS": FUENTE_ARL,
+        "ARL_RADICADO": FUENTE_ARL,
+        "ARL_RADICADO_PDF": FUENTE_ARL,
+    }
+    fuente = aliases.get(normalized, normalized)
+    if fuente not in FUENTES_CRUCE:
+        raise ValueError(
+            "fuente_cruce debe ser una de: "
+            + ", ".join(sorted(FUENTES_CRUCE))
+        )
+    return fuente
+
+
+def _status_rank(status: Any) -> int:
+    return STATUS_RANK.get(str(status or "SIN_REVISION"), 0)
+
+
+def _should_apply_source_update(previous_status: Any, new_status: Any) -> bool:
+    return _status_rank(new_status) > _status_rank(previous_status)
 
 
 def utc_now_iso() -> str:
@@ -1808,12 +1864,16 @@ def recalcular_cruce_notificaciones(
     fecha_referencia_desde: date | None = None,
     fecha_referencia_hasta: date | None = None,
     refrescar_resumen: bool = True,
+    fuente_cruce: str | None = None,
 ) -> dict[str, Any]:
+    fuente_cruce_normalizada = _normalize_fuente_cruce(fuente_cruce)
+    source_scoped_run = fuente_cruce_normalizada != FUENTE_FULL
     chunked_run = batch_size is not None or after_id_notificacion_esperada is not None
     scoped_run = (
         chunked_run
         or fecha_referencia_desde is not None
         or fecha_referencia_hasta is not None
+        or source_scoped_run
     )
     fetched_expected_rows = _fetch_expected_rows(
         id_archivo_salas,
@@ -1852,13 +1912,16 @@ def recalcular_cruce_notificaciones(
     date_window = _correo_date_window(expected_rows)
     guia_date_window = _guia_date_window(expected_rows)
     arl_date_window = _guia_date_window(expected_rows)
-    correo_rows = _fetch_correo_rows(date_window)
-    correo_index = _build_correo_index(correo_rows)
-    guia_rows = _fetch_guia_rows(guia_date_window)
-    guia_index = _build_guia_index(guia_rows)
-    guia_document_index = _build_guia_document_index(guia_rows)
-    arl_rows = _fetch_arl_radicado_rows(arl_date_window)
-    arl_document_index = _build_arl_document_index(arl_rows)
+    load_correo = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_CORREO}
+    load_guia = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_GUIA}
+    load_arl = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_ARL}
+    correo_rows = _fetch_correo_rows(date_window) if load_correo else []
+    correo_index = _build_correo_index(correo_rows) if load_correo else {}
+    guia_rows = _fetch_guia_rows(guia_date_window) if load_guia else []
+    guia_index = _build_guia_index(guia_rows) if load_guia else {}
+    guia_document_index = _build_guia_document_index(guia_rows) if load_guia else {}
+    arl_rows = _fetch_arl_radicado_rows(arl_date_window) if load_arl else []
+    arl_document_index = _build_arl_document_index(arl_rows) if load_arl else {}
 
     updates = []
     cruce_rows = []
@@ -1891,6 +1954,8 @@ def recalcular_cruce_notificaciones(
         "next_cursor": None,
         "chunked_run": chunked_run,
         "scoped_run": scoped_run,
+        "fuente_cruce": fuente_cruce_normalizada,
+        "source_scoped_run": source_scoped_run,
         "refrescar_resumen": refrescar_resumen,
         "filtro_raw_fecha_maxima_aplicado": aplica_filtro_raw_fecha_maxima,
         "raw_omitidas_por_fecha_audiencia": raw_skipped_by_date,
@@ -1918,6 +1983,8 @@ def recalcular_cruce_notificaciones(
         "sin_correo_certificado": 0,
         "cruces_eliminados": 0,
         "cruces_insertados": 0,
+        "notificaciones_omitidas_por_fuente_no_aplicable": 0,
+        "notificaciones_conservadas_por_estado_anterior": 0,
         "porcentaje_notificaciones_validadas": 0.0,
         "radicados_evaluados": 0,
         "radicados_validados": 0,
@@ -1932,16 +1999,32 @@ def recalcular_cruce_notificaciones(
         summary["next_cursor"] = summary["ultimo_id_leido"]
 
     for expected_row in expected_rows:
-        candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
-        guia_candidate, has_guia_lookup = _best_guia_candidate(
-            expected_row,
-            guia_index,
-            guia_document_index,
-        )
-        arl_candidate, has_arl_lookup = _best_arl_candidate(
-            expected_row,
-            arl_document_index,
-        )
+        candidate = None
+        has_document_candidates = False
+        guia_candidate = None
+        has_guia_lookup = False
+        arl_candidate = None
+        has_arl_lookup = False
+        if load_correo:
+            candidate, has_document_candidates = _best_candidate(expected_row, correo_index)
+        if load_guia:
+            guia_candidate, has_guia_lookup = _best_guia_candidate(
+                expected_row,
+                guia_index,
+                guia_document_index,
+            )
+        if load_arl:
+            arl_candidate, has_arl_lookup = _best_arl_candidate(
+                expected_row,
+                arl_document_index,
+            )
+        if fuente_cruce_normalizada == FUENTE_GUIA and not has_guia_lookup:
+            summary["notificaciones_omitidas_por_fuente_no_aplicable"] += 1
+            continue
+        if fuente_cruce_normalizada == FUENTE_ARL and not has_arl_lookup:
+            summary["notificaciones_omitidas_por_fuente_no_aplicable"] += 1
+            continue
+
         update_row, cruce_row = _build_revision_rows(
             expected_row,
             candidate,
@@ -1951,6 +2034,15 @@ def recalcular_cruce_notificaciones(
             arl_candidate,
             has_arl_lookup,
         )
+        previous_status = expected_row.get("estado_revision_notificacion") or "SIN_REVISION"
+        if source_scoped_run and not _should_apply_source_update(
+            previous_status,
+            update_row["estado_revision_notificacion"],
+        ):
+            summary["notificaciones_conservadas_por_estado_anterior"] += 1
+            status_by_expected_id[expected_row.get("id_notificacion_esperada")] = previous_status
+            continue
+
         updates.append(update_row)
         cruce_rows.append(cruce_row)
 

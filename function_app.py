@@ -108,6 +108,13 @@ def parse_bool(payload: dict[str, Any], field_name: str, default: bool) -> bool:
     raise ValueError(f"{field_name} debe ser booleano")
 
 
+def parse_optional_text(payload: dict[str, Any], field_name: str) -> str | None:
+    raw_value = payload.get(field_name)
+    if raw_value in (None, ""):
+        return None
+    return str(raw_value)
+
+
 def compute_payload_file_hash(payload: dict[str, Any]) -> str | None:
     raw_content = payload.get("file_content_base64")
     if not raw_content:
@@ -309,6 +316,10 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
             "refrescar_resumen",
             batch_size is None,
         )
+        fuente_cruce = (
+            parse_optional_text(payload, "fuente_cruce")
+            or parse_optional_text(payload, "fuente_actualizada")
+        )
 
         summary = db.run_in_transaction(
             lambda: recalcular_cruce_notificaciones(
@@ -317,6 +328,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 batch_size=batch_size,
                 after_id_notificacion_esperada=after_id_notificacion_esperada,
                 refrescar_resumen=refrescar_resumen,
+                fuente_cruce=fuente_cruce,
             )
         )
         return build_json_response(
@@ -327,6 +339,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 "batch_size": batch_size,
                 "after_id_notificacion_esperada": after_id_notificacion_esperada,
                 "refrescar_resumen": refrescar_resumen,
+                "fuente_cruce": fuente_cruce,
                 "cruce_notificaciones": summary,
             },
             status_code=200,

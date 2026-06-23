@@ -26,12 +26,14 @@ def _as_date(value: Any) -> date | None:
 
 
 def write_arls_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    recalcular_cruce = bool(result.get("_recalcular_cruce", True))
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
         "arls_radicado_insertados": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
+        "cruce_notificaciones": {},
         "timings": {},
         "mensaje": "Resultado de radicados ARL PDF escrito en Azure SQL",
     }
@@ -120,7 +122,7 @@ def write_arls_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[st
             summary["status"] = result.get("status") or "ERROR"
             summary["mensaje"] = "Resultado de radicados ARL PDF escrito con alertas"
 
-        if arl_rows:
+        if arl_rows and recalcular_cruce:
             date_values = [
                 parsed_date
                 for row in arl_rows
@@ -142,6 +144,11 @@ def write_arls_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[st
                         fecha_referencia_hasta=max_date,
                     ),
                 )
+        elif arl_rows:
+            summary["cruce_notificaciones"] = {
+                "omitido": True,
+                "motivo": "Recalculo omitido por solicitud",
+            }
 
         return summary
 
