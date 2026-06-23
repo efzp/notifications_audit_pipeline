@@ -1233,6 +1233,31 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
             ),
         ]
 
+    if source_key == "ARL_RADICADO_PDF":
+        rows = result.get("tabla_arls_radicado_pdf") or []
+        total_rows = result.get("total_arls_radicado_pdf") or len(rows)
+
+        return [
+            _regla_row(
+                id_archivo,
+                "LEER_PDF_ARL_RADICADO",
+                "LECTURA",
+                total_rows,
+                total_rows,
+                status,
+                "Extraccion de texto y metadatos desde PDF de radicado ARL",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLA_ARL_RADICADO",
+                "TRANSFORMACION",
+                len(rows),
+                len(rows),
+                status,
+                "Preparacion de evidencias de radicado ARL PDF",
+            ),
+        ]
+
     if source_key == "CALIFICACIONES_SOFTWARE":
         rows = result.get("tabla_calificaciones_software") or []
         total_rows = result.get("total_filas_calificaciones_software") or len(rows)
