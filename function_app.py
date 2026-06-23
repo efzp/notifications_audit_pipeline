@@ -300,6 +300,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
     try:
         payload = get_optional_request_payload(req)
         id_archivo_salas = parse_optional_int(payload, "id_archivo_salas")
+        id_archivo_evidencia = parse_optional_int(payload, "id_archivo_evidencia")
         solo_pendientes = parse_bool(payload, "solo_pendientes", False)
         batch_size = parse_optional_positive_int(payload, "batch_size")
         after_id_notificacion_esperada = parse_optional_int(
@@ -324,6 +325,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
         summary = db.run_in_transaction(
             lambda: recalcular_cruce_notificaciones(
                 id_archivo_salas=id_archivo_salas,
+                id_archivo_evidencia=id_archivo_evidencia,
                 solo_pendientes=solo_pendientes,
                 batch_size=batch_size,
                 after_id_notificacion_esperada=after_id_notificacion_esperada,
@@ -335,6 +337,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
             {
                 "status": "OK",
                 "id_archivo_salas": id_archivo_salas,
+                "id_archivo_evidencia": id_archivo_evidencia,
                 "solo_pendientes": solo_pendientes,
                 "batch_size": batch_size,
                 "after_id_notificacion_esperada": after_id_notificacion_esperada,

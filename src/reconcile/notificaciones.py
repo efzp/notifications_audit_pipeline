@@ -311,6 +311,7 @@ def _fetch_expected_rows(
     solo_pendientes_filter: bool = False,
     fecha_referencia_desde: date | None = None,
     fecha_referencia_hasta: date | None = None,
+    cedulas_normalizadas: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     base_columns = [
         "id_notificacion_esperada",
@@ -369,6 +370,12 @@ def _fetch_expected_rows(
             if fecha_referencia_hasta is not None:
                 where += f" AND {reference_expr} <= ?"
                 params.append(fecha_referencia_hasta)
+    if cedulas_normalizadas:
+        cedulas = sorted({cedula for cedula in cedulas_normalizadas if cedula})
+        if cedulas:
+            placeholders = ", ".join("?" for _ in cedulas)
+            where += f" AND [cedula_normalizada] IN ({placeholders})"
+            params.extend(cedulas)
 
     if batch_size is not None:
         where += " ORDER BY [id_notificacion_esperada] OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
@@ -377,6 +384,33 @@ def _fetch_expected_rows(
         where += " ORDER BY [id_notificacion_esperada]"
 
     return db.fetch_rows("jnc.notificacion_esperada", columns, where, params)
+
+
+def _fetch_arl_cedulas_by_archivo(id_archivo: int) -> list[str]:
+    try:
+        table_columns = db.get_table_columns("jnc.notificacion_arl_radicado")
+    except ValueError:
+        return []
+
+    columns = [
+        column
+        for column in ("cedula_normalizada", "cedula_detectada")
+        if column in table_columns
+    ]
+    if not columns:
+        return []
+
+    rows = db.fetch_rows(
+        "jnc.notificacion_arl_radicado",
+        columns,
+        "[activo] = 1 AND [id_archivo] = ?",
+        [id_archivo],
+    )
+    cedulas = {
+        normalize_document(row.get("cedula_normalizada") or row.get("cedula_detectada"))
+        for row in rows
+    }
+    return sorted(cedula for cedula in cedulas if cedula)
 
 
 def _fetch_latest_calificacion_sistema_audiencia_date() -> date | None:
@@ -600,7 +634,10 @@ def _fetch_guia_rows(date_window: tuple[date, date] | None = None) -> list[dict[
     return db.fetch_rows("jnc.guia_correo_fisico", existing_columns, where, params)
 
 
-def _fetch_arl_radicado_rows(date_window: tuple[date, date] | None = None) -> list[dict[str, Any]]:
+def _fetch_arl_radicado_rows(
+    date_window: tuple[date, date] | None = None,
+    id_archivo_evidencia: int | None = None,
+) -> list[dict[str, Any]]:
     columns = [
         "id_notificacion_arl_radicado",
         "id_archivo",
@@ -630,6 +667,9 @@ def _fetch_arl_radicado_rows(date_window: tuple[date, date] | None = None) -> li
 
     where = "[activo] = 1"
     params: list[Any] = []
+    if id_archivo_evidencia is not None:
+        where += " AND [id_archivo] = ?"
+        params.append(id_archivo_evidencia)
     if date_window:
         date_columns = [
             column_name
@@ -1858,6 +1898,7 @@ def _refresh_cruce_notificacion_pendiente(
 
 def recalcular_cruce_notificaciones(
     id_archivo_salas: int | None = None,
+    id_archivo_evidencia: int | None = None,
     solo_pendientes: bool = True,
     batch_size: int | None = None,
     after_id_notificacion_esperada: int | None = None,
@@ -1868,12 +1909,20 @@ def recalcular_cruce_notificaciones(
 ) -> dict[str, Any]:
     fuente_cruce_normalizada = _normalize_fuente_cruce(fuente_cruce)
     source_scoped_run = fuente_cruce_normalizada != FUENTE_FULL
+    evidence_scoped_run = id_archivo_evidencia is not None
+    cedulas_evidencia = (
+        _fetch_arl_cedulas_by_archivo(id_archivo_evidencia)
+        if id_archivo_evidencia is not None
+        and fuente_cruce_normalizada == FUENTE_ARL
+        else []
+    )
     chunked_run = batch_size is not None or after_id_notificacion_esperada is not None
     scoped_run = (
         chunked_run
         or fecha_referencia_desde is not None
         or fecha_referencia_hasta is not None
         or source_scoped_run
+        or evidence_scoped_run
     )
     fetched_expected_rows = _fetch_expected_rows(
         id_archivo_salas,
@@ -1882,6 +1931,7 @@ def recalcular_cruce_notificaciones(
         solo_pendientes_filter=scoped_run and solo_pendientes,
         fecha_referencia_desde=fecha_referencia_desde,
         fecha_referencia_hasta=fecha_referencia_hasta,
+        cedulas_normalizadas=cedulas_evidencia,
     )
     fetched_last_id = max(
         (
@@ -1920,7 +1970,11 @@ def recalcular_cruce_notificaciones(
     guia_rows = _fetch_guia_rows(guia_date_window) if load_guia else []
     guia_index = _build_guia_index(guia_rows) if load_guia else {}
     guia_document_index = _build_guia_document_index(guia_rows) if load_guia else {}
-    arl_rows = _fetch_arl_radicado_rows(arl_date_window) if load_arl else []
+    arl_rows = (
+        _fetch_arl_radicado_rows(arl_date_window, id_archivo_evidencia)
+        if load_arl
+        else []
+    )
     arl_document_index = _build_arl_document_index(arl_rows) if load_arl else {}
 
     updates = []
@@ -1936,6 +1990,8 @@ def recalcular_cruce_notificaciones(
         "notificaciones_leidas": len(fetched_expected_rows),
         "batch_size": batch_size,
         "after_id_notificacion_esperada": after_id_notificacion_esperada,
+        "id_archivo_evidencia": id_archivo_evidencia,
+        "cedulas_evidencia": cedulas_evidencia,
         "fecha_referencia_desde": fecha_referencia_desde.isoformat()
         if fecha_referencia_desde
         else None,
