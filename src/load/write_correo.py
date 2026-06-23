@@ -43,6 +43,7 @@ def _affected_reference_window(
 
 
 def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    recalcular_cruce = bool(result.get("_recalcular_cruce", True))
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
@@ -135,7 +136,7 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
             ),
         )
 
-        if result.get("status") == "OK":
+        if result.get("status") == "OK" and recalcular_cruce:
             affected_window = _affected_reference_window(
                 correo_rows,
                 ("fecha", "fecha_2", "fecha_3"),
@@ -157,6 +158,11 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
                     "omitido": True,
                     "motivo": "No se detectaron fechas en el correo certificado cargado",
                 }
+        elif result.get("status") == "OK":
+            summary["cruce_notificaciones"] = {
+                "omitido": True,
+                "motivo": "Recalculo omitido por solicitud",
+            }
 
         if result.get("status") != "OK":
             summary["status"] = "ERROR"

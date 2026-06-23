@@ -245,6 +245,8 @@ def handle_sql_processing(
             )
 
         result = processor(payload)
+        if "recalcular_cruce" in payload:
+            result["_recalcular_cruce"] = parse_bool(payload, "recalcular_cruce", True)
         summary = writer(id_archivo, result)
         return build_json_response(summary, status_code=200)
     except Exception as exc:
