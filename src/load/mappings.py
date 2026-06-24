@@ -111,26 +111,6 @@ ESTRUCTURA_ACTA_FIELD_MAP: dict[str, str] = {
 }
 
 
-AUDIENCIA_CASO_FIELD_MAP: dict[str, str] = {
-    "numero_orden": "numero_orden",
-    "numero_radicado": "numero_radicado",
-    "nombre_paciente": "nombre_paciente",
-    "tipo_identificacion": "tipo_identificacion",
-    "numero_identificacion": "numero_identificacion",
-    "entidad_remitente": "entidad_remitente",
-    "medico_ponente": "medico_ponente",
-    "medico_principal": "medico_principal",
-    "terapeuta_psicologa": "terapeuta_psicologa",
-    "fecha_audiencia": "fecha_audiencia",
-    "sala": "sala",
-    "sala_normalizada": "sala_normalizada",
-    "numero_acta": "numero_acta",
-    "numero_acta_normalizado": "numero_acta_normalizado",
-    "fila_texto": "fila_texto",
-    "fila_caso": "fila_caso_json",
-}
-
-
 ESTRUCTURA_HOJA_JSON_FIELDS: set[str] = {
     "ubicacion_columnas_wide_json",
     "ubicacion_columnas_detalle_json",

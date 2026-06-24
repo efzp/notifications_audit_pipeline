@@ -3,7 +3,6 @@ from typing import Any
 from src.load import db
 from src.load.prepare_sql_rows import (
     prepare_archivo_update_from_audiencias_result,
-    prepare_audiencia_caso_rows,
     prepare_error_rows,
     prepare_estructura_acta_rows,
     prepare_regla_rows,
@@ -11,25 +10,11 @@ from src.load.prepare_sql_rows import (
 from src.load.timing import timed_step
 
 
-def _estructura_acta_key(row: dict[str, Any]) -> tuple[Any, ...]:
-    fecha = row.get("fecha_audiencia")
-    if hasattr(fecha, "isoformat"):
-        fecha = fecha.isoformat()
-
-    return (
-        row.get("id_archivo"),
-        row.get("numero_acta_normalizado"),
-        fecha,
-        row.get("sala_normalizada"),
-    )
-
-
 def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
         "estructuras_acta_insertadas": 0,
-        "casos_acta_insertados": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
         "timings": {},
@@ -50,11 +35,6 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
             ),
         )
 
-        timed_step(
-            timings,
-            "delete_audiencia_caso",
-            lambda: db.delete_by_archivo("jnc.audiencia_caso", id_archivo),
-        )
         timed_step(
             timings,
             "delete_etl_estructura_acta",
@@ -93,41 +73,6 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
             timings,
             "insert_etl_estructura_acta",
             lambda: db.insert_many("jnc.etl_estructura_acta", estructura_rows),
-        )
-        estructura_id_by_key = timed_step(
-            timings,
-            "fetch_estructura_acta_id_map",
-            lambda: {
-                _estructura_acta_key(row): row.get("id_estructura_acta")
-                for row in db.fetch_rows(
-                    "jnc.etl_estructura_acta",
-                    [
-                        "id_estructura_acta",
-                        "id_archivo",
-                        "numero_acta_normalizado",
-                        "fecha_audiencia",
-                        "sala_normalizada",
-                    ],
-                    "[id_archivo] = ?",
-                    [id_archivo],
-                )
-            },
-        )
-        caso_rows = timed_step(
-            timings,
-            "prepare_audiencia_caso",
-            lambda: prepare_audiencia_caso_rows(
-                id_archivo,
-                result,
-                estructura_id_by_key,
-            )
-            if result.get("status") == "OK"
-            else [],
-        )
-        summary["casos_acta_insertados"] = timed_step(
-            timings,
-            "insert_audiencia_caso",
-            lambda: db.insert_many("jnc.audiencia_caso", caso_rows),
         )
         summary["errores_insertados"] = timed_step(
             timings,
