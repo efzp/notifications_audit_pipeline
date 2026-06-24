@@ -682,11 +682,11 @@ def _fetch_arl_radicado_rows(
                 f"([{column_name}] BETWEEN ? AND ?)"
                 for column_name in date_columns
             ) + ")"
-            params = [
+            params.extend(
                 value
                 for _ in date_columns
                 for value in (start_date, end_date)
-            ]
+            )
 
     return db.fetch_rows("jnc.notificacion_arl_radicado", existing_columns, where, params)
 
