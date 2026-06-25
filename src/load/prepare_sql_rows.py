@@ -357,6 +357,27 @@ def prepare_archivo_update_from_guias_result(id_archivo: int, result: dict[str, 
     }
 
 
+def prepare_archivo_update_from_revision_manual_guias_result(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    total_rows = result.get("total_filas_revision_manual_guias") or len(
+        result.get("tabla_revision_manual_guias") or []
+    )
+
+    return {
+        "id_archivo": id_archivo,
+        **_prepare_archivo_identity_update(result),
+        "procesador_status": result.get("status"),
+        "tamano_bytes": result.get("tamano_bytes"),
+        "notificaciones_detectadas": total_rows,
+        "estado_proceso": "PROCESADO"
+        if result.get("status") == "OK"
+        else "ERROR_PROCESAMIENTO",
+        "fecha_fin_proceso": utc_now_iso(),
+    }
+
+
 def prepare_archivo_update_from_calificaciones_result(
     id_archivo: int,
     result: dict[str, Any],
@@ -937,6 +958,54 @@ def prepare_guia_correo_fisico_rows(
     return rows
 
 
+def prepare_revision_manual_guia_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+
+    for source_row in result.get("tabla_revision_manual_guias") or []:
+        mapped_row = {
+            "id_archivo": id_archivo,
+            "numero_linea_excel": source_row.get("numero_linea_excel"),
+            "id_notificacion_esperada": source_row.get("id_notificacion_esperada"),
+            "numero_radicado_normalizado": normalize_radicado(
+                source_row.get("numero_radicado_normalizado")
+            ),
+            "cedula_normalizada": normalize_document(
+                source_row.get("cedula_normalizada")
+            ),
+            "tipo_destinatario": clean_text(
+                source_row.get("tipo_destinatario")
+            ),
+            "cumplimiento": source_row.get("cumplimiento"),
+            "cumplimiento_extemporaneo": source_row.get(
+                "cumplimiento_extemporaneo"
+            ),
+            "observaciones": clean_text(source_row.get("observaciones")),
+            "revisado_por": clean_text(source_row.get("revisado_por")),
+            "fecha_revision": utc_now_iso(),
+            "estado_aplicacion": "PENDIENTE",
+            "activo": 1,
+            "fecha_creacion": utc_now_iso(),
+        }
+        mapped_row["hash_revision_manual"] = sha256_dict(
+            {
+                key: value
+                for key, value in mapped_row.items()
+                if key not in {
+                    "fecha_revision",
+                    "estado_aplicacion",
+                    "fecha_creacion",
+                    "fecha_actualizacion",
+                }
+            }
+        )
+        rows.append(mapped_row)
+
+    return rows
+
+
 def prepare_error_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
 
@@ -1118,6 +1187,31 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
                 len(rows),
                 status,
                 "Preparacion de guias de correo fisico",
+            ),
+        ]
+
+    if source_key == "REVISION_MANUAL_GUIAS":
+        rows = result.get("tabla_revision_manual_guias") or []
+        total_rows = result.get("total_filas_revision_manual_guias") or len(rows)
+
+        return [
+            _regla_row(
+                id_archivo,
+                "LEER_XLSX_REVISION_MANUAL_GUIAS",
+                "LECTURA",
+                total_rows,
+                total_rows,
+                status,
+                "Lectura de decisiones humanas para revision manual de guias",
+            ),
+            _regla_row(
+                id_archivo,
+                "GENERAR_TABLA_REVISION_MANUAL_GUIA",
+                "TRANSFORMACION",
+                len(rows),
+                len(rows),
+                status,
+                "Preparacion de decisiones humanas de revision manual de guias",
             ),
         ]
 

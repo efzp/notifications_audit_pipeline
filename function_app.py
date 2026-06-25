@@ -14,14 +14,19 @@ import procesador_arls
 import procesador_calificaciones
 import procesador_correo
 import procesador_guias
+import procesador_revision_manual_guias
 from src.load import db
 from src.load.write_audiencias import write_audiencias_result_to_sql
 from src.load.write_arls import write_arls_result_to_sql
 from src.load.write_calificaciones import write_calificaciones_result_to_sql
 from src.load.write_correo import write_correo_result_to_sql
 from src.load.write_guias import write_guias_result_to_sql
+from src.load.write_revision_manual_guias import (
+    write_revision_manual_guias_result_to_sql,
+)
 from src.load.write_salas import write_salas_result_to_sql
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
+from src.reconcile.revision_manual_guias import aplicar_revision_manual_guias
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -359,6 +364,44 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
         )
 
 
+def handle_aplicar_revision_manual_guias(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("aplicar_revision_manual_guias ejecutada")
+
+    try:
+        payload = get_optional_request_payload(req)
+        id_archivo = parse_optional_int(payload, "id_archivo")
+        batch_size = parse_optional_positive_int(payload, "batch_size")
+        refrescar_resumen = parse_bool(payload, "refrescar_resumen", True)
+
+        summary = db.run_in_transaction(
+            lambda: aplicar_revision_manual_guias(
+                id_archivo=id_archivo,
+                batch_size=batch_size,
+                refrescar_resumen=refrescar_resumen,
+            )
+        )
+        return build_json_response(
+            {
+                "status": "OK",
+                "id_archivo": id_archivo,
+                "batch_size": batch_size,
+                "refrescar_resumen": refrescar_resumen,
+                "revision_manual_guias": summary,
+            },
+            status_code=200,
+        )
+    except Exception as exc:
+        logging.exception("Error aplicando revision manual de guias")
+        return build_json_response(
+            {
+                "status": "ERROR_PROCESAMIENTO",
+                "errores": 1,
+                "mensaje": str(exc),
+            },
+            status_code=500,
+        )
+
+
 @app.route(route="procesar_input_salas", methods=["POST"])
 def procesar_input_salas(req: func.HttpRequest) -> func.HttpResponse:
     return handle_sql_processing(
@@ -399,6 +442,16 @@ def procesar_guias_correo_fisico(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="procesar_revision_manual_guias", methods=["POST"])
+def procesar_revision_manual_guias(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_revision_manual_guias",
+        procesador_revision_manual_guias.process_payload_data,
+        write_revision_manual_guias_result_to_sql,
+    )
+
+
 @app.route(route="procesar_arls_radicado_pdf", methods=["POST"])
 def procesar_arls_radicado_pdf(req: func.HttpRequest) -> func.HttpResponse:
     return handle_sql_processing(
@@ -432,3 +485,8 @@ def procesar_sistema_jnc(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="recalcular_cruce_notificaciones", methods=["POST"])
 def recalcular_cruce_notificaciones_route(req: func.HttpRequest) -> func.HttpResponse:
     return handle_recalcular_cruce_notificaciones(req)
+
+
+@app.route(route="aplicar_revision_manual_guias", methods=["POST"])
+def aplicar_revision_manual_guias_route(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_aplicar_revision_manual_guias(req)

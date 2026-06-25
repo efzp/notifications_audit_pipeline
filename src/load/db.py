@@ -22,6 +22,7 @@ ALLOWED_TABLES = {
     "jnc.resumen_validacion_radicado",
     "jnc.calificacion_sistema_caso",
     "jnc.calificacion_sistema_envio_entidad",
+    "jnc.revision_manual_guia",
 }
 
 _COLUMN_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
