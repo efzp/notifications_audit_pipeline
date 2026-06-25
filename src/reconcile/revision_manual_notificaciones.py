@@ -14,7 +14,7 @@ from src.utils.normalization import json_dumps_safe
 
 
 FINAL_STATUSES = {ESTADO_CUMPLE, ESTADO_FUERA_DE_PLAZO}
-MANUAL_VERSION = f"{CRUCE_VERSION}:REVISION_MANUAL_GUIA"
+MANUAL_VERSION = f"{CRUCE_VERSION}:REVISION_MANUAL_NOTIFICACION"
 
 
 def _truthy_bit(value: Any) -> bool:
@@ -22,7 +22,7 @@ def _truthy_bit(value: Any) -> bool:
         return value
     if isinstance(value, int):
         return value == 1
-    return str(value or "").strip().lower() in {"1", "true", "si", "sí", "s", "yes"}
+    return str(value or "").strip().lower() in {"1", "true", "si", "s", "yes"}
 
 
 def _manual_status(row: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -43,7 +43,7 @@ def _fetch_pending_manual_rows(
     batch_size: int | None,
 ) -> list[dict[str, Any]]:
     columns = [
-        "id_revision_manual_guia",
+        "id_revision_manual_notificacion",
         "id_archivo",
         "numero_linea_excel",
         "id_notificacion_esperada",
@@ -61,12 +61,12 @@ def _fetch_pending_manual_rows(
     if id_archivo is not None:
         where += " AND [id_archivo] = ?"
         params.append(id_archivo)
-    where += " ORDER BY [id_revision_manual_guia]"
+    where += " ORDER BY [id_revision_manual_notificacion]"
     if batch_size is not None:
         where += " OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
         params.append(batch_size)
 
-    return db.fetch_rows("jnc.revision_manual_guia", columns, where, params)
+    return db.fetch_rows("jnc.revision_manual_notificacion", columns, where, params)
 
 
 def _fetch_expected_rows(ids: list[Any]) -> dict[int, dict[str, Any]]:
@@ -121,12 +121,12 @@ def _manual_detail_json(
     status: str,
 ) -> str | None:
     detail = {
-        "fuente_revision": "REVISION_MANUAL_GUIA",
+        "fuente_revision": "REVISION_MANUAL_NOTIFICACION",
         "estado_revision_notificacion": status,
         "numero_radicado_normalizado": expected_row.get("numero_radicado_normalizado"),
         "cedula_normalizada": expected_row.get("cedula_normalizada"),
         "tipo_destinatario": expected_row.get("tipo_destinatario"),
-        "id_revision_manual_guia": manual_row.get("id_revision_manual_guia"),
+        "id_revision_manual_notificacion": manual_row.get("id_revision_manual_notificacion"),
         "id_archivo_revision_manual": manual_row.get("id_archivo"),
         "numero_linea_excel": manual_row.get("numero_linea_excel"),
         "cumplimiento": bool(_truthy_bit(manual_row.get("cumplimiento"))),
@@ -157,7 +157,7 @@ def _build_manual_rows(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     descripcion = (
         manual_row.get("observaciones")
-        or f"Aplicado por revision manual de guias: {status}"
+        or f"Aplicado por revision manual de notificaciones: {status}"
     )
     detail_json = _manual_detail_json(manual_row, expected_row, status)
     cumple_plazo = status == ESTADO_CUMPLE
@@ -192,9 +192,9 @@ def _build_manual_rows(
         "cumple_correo": 1,
         "cumple_plazo": 1 if cumple_plazo else 0,
         "score_total": 4 if cumple_plazo else 3,
-        "fuente_documento_match": "REVISION_MANUAL_GUIA",
+        "fuente_documento_match": "REVISION_MANUAL_NOTIFICACION",
         "evento_tipo_match": "REVISION_MANUAL",
-        "tipo_match_correo": "REVISION_MANUAL_GUIA",
+        "tipo_match_correo": "REVISION_MANUAL_NOTIFICACION",
         "correo_esperado": expected_row.get("correo_o_guia_reportado"),
         "correo_certificado": None,
         "fecha_audiencia": expected_row.get("hoja_trabajo_fecha_audiencia")
@@ -218,7 +218,7 @@ def _application_update(
     revision_date: str,
 ) -> dict[str, Any]:
     return {
-        "id_revision_manual_guia": manual_row["id_revision_manual_guia"],
+        "id_revision_manual_notificacion": manual_row["id_revision_manual_notificacion"],
         "estado_aplicacion": estado_aplicacion,
         "fecha_aplicacion": revision_date,
         "detalle_aplicacion": json.dumps(detalle, ensure_ascii=False, default=str),
@@ -226,7 +226,7 @@ def _application_update(
     }
 
 
-def aplicar_revision_manual_guias(
+def aplicar_revision_manual_notificaciones(
     id_archivo: int | None = None,
     batch_size: int | None = None,
     refrescar_resumen: bool = True,
@@ -340,8 +340,8 @@ def aplicar_revision_manual_guias(
         notification_updates,
     )
     db.execute_many_updates(
-        "jnc.revision_manual_guia",
-        "id_revision_manual_guia",
+        "jnc.revision_manual_notificacion",
+        "id_revision_manual_notificacion",
         application_updates,
     )
 

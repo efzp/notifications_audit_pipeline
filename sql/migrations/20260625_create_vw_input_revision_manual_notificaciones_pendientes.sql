@@ -1,5 +1,5 @@
 /*
-Vista base para llenar el template de revision manual de guias.
+Vista base para llenar el template de revision manual de notificaciones.
 
 Granularidad: una fila por notificacion esperada pendiente de cruce.
 Los unicos campos que debe llenar el auditor en Excel son:
@@ -9,7 +9,7 @@ Los unicos campos que debe llenar el auditor en Excel son:
 - revisado_por
 */
 
-CREATE OR ALTER VIEW jnc.vw_input_revision_manual_guias_pendientes
+CREATE OR ALTER VIEW jnc.vw_input_revision_manual_notificaciones_pendientes
 AS
 SELECT
     ne.id_notificacion_esperada,

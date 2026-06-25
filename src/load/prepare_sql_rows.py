@@ -357,12 +357,12 @@ def prepare_archivo_update_from_guias_result(id_archivo: int, result: dict[str, 
     }
 
 
-def prepare_archivo_update_from_revision_manual_guias_result(
+def prepare_archivo_update_from_revision_manual_notificaciones_result(
     id_archivo: int,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    total_rows = result.get("total_filas_revision_manual_guias") or len(
-        result.get("tabla_revision_manual_guias") or []
+    total_rows = result.get("total_filas_revision_manual_notificaciones") or len(
+        result.get("tabla_revision_manual_notificaciones") or []
     )
 
     return {
@@ -958,13 +958,13 @@ def prepare_guia_correo_fisico_rows(
     return rows
 
 
-def prepare_revision_manual_guia_rows(
+def prepare_revision_manual_notificacion_rows(
     id_archivo: int,
     result: dict[str, Any],
 ) -> list[dict[str, Any]]:
     rows = []
 
-    for source_row in result.get("tabla_revision_manual_guias") or []:
+    for source_row in result.get("tabla_revision_manual_notificaciones") or []:
         mapped_row = {
             "id_archivo": id_archivo,
             "numero_linea_excel": source_row.get("numero_linea_excel"),
@@ -1190,28 +1190,28 @@ def prepare_regla_rows(id_archivo: int, result: dict[str, Any], source: str) -> 
             ),
         ]
 
-    if source_key == "REVISION_MANUAL_GUIAS":
-        rows = result.get("tabla_revision_manual_guias") or []
-        total_rows = result.get("total_filas_revision_manual_guias") or len(rows)
+    if source_key == "REVISION_MANUAL_NOTIFICACIONES":
+        rows = result.get("tabla_revision_manual_notificaciones") or []
+        total_rows = result.get("total_filas_revision_manual_notificaciones") or len(rows)
 
         return [
             _regla_row(
                 id_archivo,
-                "LEER_XLSX_REVISION_MANUAL_GUIAS",
+                "LEER_XLSX_REVISION_MANUAL_NOTIFICACIONES",
                 "LECTURA",
                 total_rows,
                 total_rows,
                 status,
-                "Lectura de decisiones humanas para revision manual de guias",
+                "Lectura de decisiones humanas para revision manual de notificaciones",
             ),
             _regla_row(
                 id_archivo,
-                "GENERAR_TABLA_REVISION_MANUAL_GUIA",
+                "GENERAR_TABLA_REVISION_MANUAL_NOTIFICACION",
                 "TRANSFORMACION",
                 len(rows),
                 len(rows),
                 status,
-                "Preparacion de decisiones humanas de revision manual de guias",
+                "Preparacion de decisiones humanas de revision manual de notificaciones",
             ),
         ]
 

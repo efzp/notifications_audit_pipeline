@@ -2,26 +2,27 @@ from typing import Any
 
 from src.load import db
 from src.load.prepare_sql_rows import (
-    prepare_archivo_update_from_revision_manual_guias_result,
+    prepare_archivo_update_from_revision_manual_notificaciones_result,
     prepare_error_rows,
     prepare_regla_rows,
-    prepare_revision_manual_guia_rows,
+    prepare_revision_manual_notificacion_rows,
 )
 from src.load.timing import timed_step
 
 
-def write_revision_manual_guias_result_to_sql(
+def write_revision_manual_notificaciones_result_to_sql(
     id_archivo: int,
     result: dict[str, Any],
 ) -> dict[str, Any]:
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
+        "notificaciones_revisadas_insertadas": 0,
         "revisiones_insertadas": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
         "timings": {},
-        "mensaje": "Revision manual de guias escrita en Azure SQL",
+        "mensaje": "Revision manual de notificaciones escrita en Azure SQL",
     }
 
     def transaction():
@@ -40,8 +41,8 @@ def write_revision_manual_guias_result_to_sql(
 
         timed_step(
             timings,
-            "delete_revision_manual_guia",
-            lambda: db.delete_by_archivo("jnc.revision_manual_guia", id_archivo),
+            "delete_revision_manual_notificacion",
+            lambda: db.delete_by_archivo("jnc.revision_manual_notificacion", id_archivo),
         )
         timed_step(
             timings,
@@ -56,8 +57,8 @@ def write_revision_manual_guias_result_to_sql(
 
         revision_rows = timed_step(
             timings,
-            "prepare_revision_manual_guia",
-            lambda: prepare_revision_manual_guia_rows(id_archivo, result)
+            "prepare_revision_manual_notificacion",
+            lambda: prepare_revision_manual_notificacion_rows(id_archivo, result)
             if result.get("status") == "OK"
             else [],
         )
@@ -72,15 +73,18 @@ def write_revision_manual_guias_result_to_sql(
             lambda: prepare_regla_rows(
                 id_archivo,
                 result,
-                "REVISION_MANUAL_GUIAS",
+                "REVISION_MANUAL_NOTIFICACIONES",
             ),
         )
 
-        summary["revisiones_insertadas"] = timed_step(
+        summary["notificaciones_revisadas_insertadas"] = timed_step(
             timings,
-            "insert_revision_manual_guia",
-            lambda: db.insert_many("jnc.revision_manual_guia", revision_rows),
+            "insert_revision_manual_notificacion",
+            lambda: db.insert_many("jnc.revision_manual_notificacion", revision_rows),
         )
+        summary["revisiones_insertadas"] = summary[
+            "notificaciones_revisadas_insertadas"
+        ]
         summary["errores_insertados"] = timed_step(
             timings,
             "insert_etl_error_procesamiento",
@@ -95,7 +99,7 @@ def write_revision_manual_guias_result_to_sql(
         archivo_update = timed_step(
             timings,
             "prepare_archivo_update",
-            lambda: prepare_archivo_update_from_revision_manual_guias_result(
+            lambda: prepare_archivo_update_from_revision_manual_notificaciones_result(
                 id_archivo,
                 result,
             ),
@@ -114,7 +118,7 @@ def write_revision_manual_guias_result_to_sql(
 
         if result.get("status") != "OK":
             summary["status"] = "ERROR"
-            summary["mensaje"] = "Revision manual de guias escrita con errores"
+            summary["mensaje"] = "Revision manual de notificaciones escrita con errores"
 
         return summary
 

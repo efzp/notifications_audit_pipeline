@@ -12,9 +12,11 @@ from openpyxl import load_workbook
 from src.utils.normalization import clean_text, normalize_document, normalize_radicado
 
 
-PAYLOAD_PATH = Path("payload_revision_manual_guias.json")
-EXPECTED_FILE_TYPE = "REVISION_MANUAL_GUIAS"
-SHEET_NAME = "Revision manual guias"
+PAYLOAD_PATH = Path("payload_revision_manual_notificaciones.json")
+EXPECTED_FILE_TYPE = "REVISION_MANUAL_NOTIFICACIONES"
+LEGACY_FILE_TYPES = {"REVISION_MANUAL_GUIAS"}
+SHEET_NAME = "Revision manual notificaciones"
+LEGACY_SHEET_NAMES = {"Revision manual guias"}
 HEADER_ROW = 2
 
 REQUIRED_FIELDS = {
@@ -71,11 +73,13 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if missing:
         raise ValueError(f"Faltan campos obligatorios en el payload: {', '.join(missing)}")
 
-    if payload["tipo_archivo"] != EXPECTED_FILE_TYPE:
+    if payload["tipo_archivo"] not in {EXPECTED_FILE_TYPE, *LEGACY_FILE_TYPES}:
         raise ValueError(
             f"tipo_archivo debe ser {EXPECTED_FILE_TYPE}, recibido: {payload['tipo_archivo']}"
         )
 
+    payload = dict(payload)
+    payload["tipo_archivo"] = EXPECTED_FILE_TYPE
     return payload
 
 
@@ -127,10 +131,20 @@ def row_has_human_edit(row: dict[str, Any]) -> bool:
 
 def extract_revision_rows(content: bytes) -> list[dict[str, Any]]:
     workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    if SHEET_NAME not in workbook.sheetnames:
+    sheet_name = SHEET_NAME
+    if sheet_name not in workbook.sheetnames:
+        sheet_name = next(
+            (
+                legacy_name
+                for legacy_name in LEGACY_SHEET_NAMES
+                if legacy_name in workbook.sheetnames
+            ),
+            None,
+        )
+    if sheet_name is None:
         raise ValueError(f"El archivo debe contener la hoja: {SHEET_NAME}")
 
-    worksheet = workbook[SHEET_NAME]
+    worksheet = workbook[sheet_name]
     raw_headers = [
         normalize_header(cell.value)
         for cell in next(
@@ -228,8 +242,8 @@ def process_payload_data(payload: dict[str, Any]) -> dict[str, Any]:
         "nombre_archivo": payload["nombre_archivo"],
         "ruta_sharepoint": payload["ruta_sharepoint"],
         "tamano_bytes": len(content),
-        "total_filas_revision_manual_guias": len(revision_rows),
-        "tabla_revision_manual_guias": revision_rows,
+        "total_filas_revision_manual_notificaciones": len(revision_rows),
+        "tabla_revision_manual_notificaciones": revision_rows,
     }
 
 

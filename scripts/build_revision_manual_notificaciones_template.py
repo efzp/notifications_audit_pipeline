@@ -9,7 +9,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
-OUTPUT_PATH = Path("salida") / "template_revision_manual_guias.xlsx"
+OUTPUT_PATH = Path("salida") / "template_revision_manual_notificaciones.xlsx"
 
 
 HEADERS = [
@@ -55,7 +55,7 @@ EXAMPLE_ROW = [
     "B12 (EPS) Usuario: comentario de ejemplo",
     1,
     0,
-    "Validado manualmente contra guia fisica.",
+    "Validado manualmente contra evidencia disponible.",
     "usuario@empresa.com",
 ]
 
@@ -109,7 +109,7 @@ def style_sheet(ws):
 
     ws.freeze_panes = "A3"
     ws.sheet_view.showGridLines = False
-    ws["A1"] = "Template revision manual de guias"
+    ws["A1"] = "Template revision manual de notificaciones"
     ws["A1"].font = Font(bold=True, color="FFFFFF", size=14)
     ws["A1"].fill = title_fill
     ws["A1"].alignment = Alignment(vertical="center")
@@ -187,7 +187,7 @@ def add_validations(wb, ws):
 def create_workbook():
     wb = Workbook()
     ws = wb.active
-    ws.title = "Revision manual guias"
+    ws.title = "Revision manual notificaciones"
     catalogs = wb.create_sheet("Catalogos")
     notes = wb.create_sheet("Instrucciones")
 
@@ -200,7 +200,7 @@ def create_workbook():
     style_sheet(ws)
 
     last_column = get_column_letter(len(HEADERS))
-    table = Table(displayName="RevisionManualGuias", ref=f"A2:{last_column}202")
+    table = Table(displayName="RevisionManualNotificaciones", ref=f"A2:{last_column}202")
     table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2",
         showFirstColumn=False,
@@ -288,13 +288,13 @@ def main():
     wb.save(OUTPUT_PATH)
 
     check_wb = load_workbook(OUTPUT_PATH, data_only=False)
-    required_sheets = {"Revision manual guias", "Catalogos", "Instrucciones"}
+    required_sheets = {"Revision manual notificaciones", "Catalogos", "Instrucciones"}
     missing = required_sheets.difference(check_wb.sheetnames)
     if missing:
         raise RuntimeError(f"Faltan hojas: {sorted(missing)}")
     headers = [
         cell.value
-        for cell in check_wb["Revision manual guias"][2]
+        for cell in check_wb["Revision manual notificaciones"][2]
         if cell.value is not None
     ]
     if headers != HEADERS:
