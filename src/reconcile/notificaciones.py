@@ -1588,6 +1588,10 @@ def _build_revision_rows(
         "cedula_normalizada": expected_row.get("cedula_normalizada"),
         "tipo_destinatario": expected_row.get("tipo_destinatario"),
         "fuente_correo_reportado": expected_row.get("fuente_correo_reportado"),
+        "entidad_remitente_esperada": expected_row.get("entidad_remitente_esperada"),
+        "entidad_remitente_esperada_normalizada": expected_row.get(
+            "entidad_remitente_esperada_normalizada"
+        ),
         "id_calificacion_sistema_envio_fallback": expected_row.get(
             "id_calificacion_sistema_envio_fallback"
         ),
