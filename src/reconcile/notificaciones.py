@@ -1285,7 +1285,7 @@ def _best_arl_candidate(
     expected_row: dict[str, Any],
     arl_document_index: dict[str, list[dict[str, Any]]],
 ) -> tuple[dict[str, Any] | None, bool]:
-    if str(expected_row.get("tipo_destinatario") or "").upper() != "ARL":
+    if not _uses_arl_radicado_lookup(expected_row):
         return None, False
 
     expected_document = normalize_document(
@@ -1311,6 +1311,25 @@ def _best_arl_candidate(
         reverse=True,
     )
     return scored_candidates[0], True
+
+
+def _uses_arl_radicado_lookup(expected_row: dict[str, Any]) -> bool:
+    tipo_destinatario = str(expected_row.get("tipo_destinatario") or "").upper()
+    if tipo_destinatario == "ARL":
+        return True
+    if tipo_destinatario != "REMITENTE":
+        return False
+
+    arl_esperada = (
+        expected_row.get("arl_esperada_normalizada")
+        or expected_row.get("arl_esperada")
+    )
+    entidad_remitente = (
+        expected_row.get("nombre_entidad")
+        or expected_row.get("entidad_remitente")
+        or expected_row.get("correo_o_guia_reportado")
+    )
+    return _arl_names_compatible(arl_esperada, entidad_remitente)
 
 
 def _best_guia_candidate(
