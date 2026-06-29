@@ -34,7 +34,7 @@ ARL_FECHA_VENTANA_DIAS = 30
 FUZZY_THRESHOLD = 0.82
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 MAX_EMAIL_LOCAL_PART_DISTANCE = 2
-CRUCE_VERSION = "1.0"
+CRUCE_VERSION = "1.1"
 CORREO_FECHA_VENTANA_DIAS = 7
 GUIA_MATCH_DIGITS = 9
 GUIA_ENVIA_MATCH_THRESHOLD = 0.8
@@ -446,6 +446,8 @@ def _enrich_expected_arl_fields(expected_rows: list[dict[str, Any]]) -> None:
             "id_calificacion_sistema_caso",
             "arl",
             "arl_normalizado",
+            "entidad_remitente",
+            "entidad_remitente_normalizado",
         )
         if column in table_columns
     ]
@@ -480,6 +482,11 @@ def _enrich_expected_arl_fields(expected_rows: list[dict[str, Any]]) -> None:
         row["arl_esperada_normalizada"] = (
             arl_row.get("arl_normalizado")
             or normalize_db_string(arl_row.get("arl"))
+        )
+        row["entidad_remitente_esperada"] = arl_row.get("entidad_remitente")
+        row["entidad_remitente_esperada_normalizada"] = (
+            arl_row.get("entidad_remitente_normalizado")
+            or normalize_db_string(arl_row.get("entidad_remitente"))
         )
 
 
@@ -1285,7 +1292,7 @@ def _best_arl_candidate(
     expected_row: dict[str, Any],
     arl_document_index: dict[str, list[dict[str, Any]]],
 ) -> tuple[dict[str, Any] | None, bool]:
-    if str(expected_row.get("tipo_destinatario") or "").upper() != "ARL":
+    if not _uses_arl_radicado_lookup(expected_row):
         return None, False
 
     expected_document = normalize_document(
@@ -1311,6 +1318,27 @@ def _best_arl_candidate(
         reverse=True,
     )
     return scored_candidates[0], True
+
+
+def _uses_arl_radicado_lookup(expected_row: dict[str, Any]) -> bool:
+    tipo_destinatario = str(expected_row.get("tipo_destinatario") or "").upper()
+    if tipo_destinatario == "ARL":
+        return True
+    if tipo_destinatario != "REMITENTE":
+        return False
+
+    arl_esperada = (
+        expected_row.get("arl_esperada_normalizada")
+        or expected_row.get("arl_esperada")
+    )
+    entidad_remitente = (
+        expected_row.get("entidad_remitente_esperada_normalizada")
+        or expected_row.get("entidad_remitente_esperada")
+        or expected_row.get("nombre_entidad")
+        or expected_row.get("entidad_remitente")
+        or expected_row.get("correo_o_guia_reportado")
+    )
+    return _arl_names_compatible(arl_esperada, entidad_remitente)
 
 
 def _best_guia_candidate(
@@ -1560,6 +1588,10 @@ def _build_revision_rows(
         "cedula_normalizada": expected_row.get("cedula_normalizada"),
         "tipo_destinatario": expected_row.get("tipo_destinatario"),
         "fuente_correo_reportado": expected_row.get("fuente_correo_reportado"),
+        "entidad_remitente_esperada": expected_row.get("entidad_remitente_esperada"),
+        "entidad_remitente_esperada_normalizada": expected_row.get(
+            "entidad_remitente_esperada_normalizada"
+        ),
         "id_calificacion_sistema_envio_fallback": expected_row.get(
             "id_calificacion_sistema_envio_fallback"
         ),
