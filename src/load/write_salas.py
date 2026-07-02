@@ -444,7 +444,10 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
             duplicado_consolidado_omitido = False
             calificacion_caso_id_by_key = None
             fallback_correo_by_key = None
-            if result.get("modo_procesamiento") != RAW_ORIGIN:
+            if (
+                result.get("modo_procesamiento") != RAW_ORIGIN
+                and not result.get("_forzar_reproceso")
+            ):
                 consolidated_radicados = [
                     row.get("numero_radicado_normalizado")
                     for row in caso_rows
@@ -498,6 +501,18 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                             consolidated_radicados
                         ),
                     )
+            elif result.get("modo_procesamiento") != RAW_ORIGIN:
+                consolidated_radicados = [
+                    row.get("numero_radicado_normalizado")
+                    for row in caso_rows
+                ]
+                summary["prioridad_consolidado"] = timed_step(
+                    timings,
+                    "delete_raw_prioridad_consolidado",
+                    lambda: _delete_raw_rows_for_consolidated_radicados(
+                        consolidated_radicados
+                    ),
+                )
             if not duplicado_consolidado_omitido:
                 summary["casos_insertados"] = timed_step(
                     timings,
