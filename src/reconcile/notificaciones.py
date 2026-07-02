@@ -1072,6 +1072,23 @@ def _arl_names_compatible(expected_value: Any, evidence_value: Any) -> bool:
     return bool(expected_marker and evidence_marker and expected_marker == evidence_marker)
 
 
+def _remitente_arl_channel_marker(value: Any) -> bool:
+    text = _normalize_match_text(value)
+    if not text:
+        return False
+
+    compact = text.replace(" ", "")
+    return (
+        compact.startswith("raent")
+        or compact.startswith("radent")
+        or compact.startswith("raentidad")
+        or compact.startswith("radentidad")
+        or compact.startswith("radplataforma")
+        or compact.startswith("app")
+        or "radicadoentidad" in compact
+    )
+
+
 def _score_arl_candidate(
     expected_row: dict[str, Any],
     arl_row: dict[str, Any],
@@ -1341,9 +1358,15 @@ def _uses_arl_radicado_lookup(expected_row: dict[str, Any]) -> bool:
         expected_row.get("entidad_remitente"),
         expected_row.get("correo_o_guia_reportado"),
     ]
-    return any(
-        _arl_names_compatible(arl_esperada, candidate)
-        for candidate in remitente_candidates
+    return (
+        any(
+            _arl_names_compatible(arl_esperada, candidate)
+            for candidate in remitente_candidates
+        )
+        or any(
+            _remitente_arl_channel_marker(candidate)
+            for candidate in remitente_candidates
+        )
     )
 
 
