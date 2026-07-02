@@ -116,6 +116,8 @@ EXCLUDED_NOTIFICATION_EMAIL_VALUES = {
     "no_informa",
     "no_informan",
     "no_informado",
+    "no_refiere",
+    "no_refieren",
     "no_reporta",
     "no_reportan",
     "independiente",
