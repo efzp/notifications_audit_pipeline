@@ -1322,23 +1322,29 @@ def _best_arl_candidate(
 
 def _uses_arl_radicado_lookup(expected_row: dict[str, Any]) -> bool:
     tipo_destinatario = str(expected_row.get("tipo_destinatario") or "").upper()
+    arl_esperada = (
+        expected_row.get("arl_esperada_normalizada")
+        or expected_row.get("arl_esperada")
+    )
+
+    if not _arl_marker(arl_esperada):
+        return False
     if tipo_destinatario == "ARL":
         return True
     if tipo_destinatario != "REMITENTE":
         return False
 
-    arl_esperada = (
-        expected_row.get("arl_esperada_normalizada")
-        or expected_row.get("arl_esperada")
+    remitente_candidates = [
+        expected_row.get("entidad_remitente_esperada_normalizada"),
+        expected_row.get("entidad_remitente_esperada"),
+        expected_row.get("nombre_entidad"),
+        expected_row.get("entidad_remitente"),
+        expected_row.get("correo_o_guia_reportado"),
+    ]
+    return any(
+        _arl_names_compatible(arl_esperada, candidate)
+        for candidate in remitente_candidates
     )
-    entidad_remitente = (
-        expected_row.get("entidad_remitente_esperada_normalizada")
-        or expected_row.get("entidad_remitente_esperada")
-        or expected_row.get("nombre_entidad")
-        or expected_row.get("entidad_remitente")
-        or expected_row.get("correo_o_guia_reportado")
-    )
-    return _arl_names_compatible(arl_esperada, entidad_remitente)
 
 
 def _best_guia_candidate(
