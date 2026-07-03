@@ -1293,8 +1293,8 @@ def _best_candidate(
         key=lambda item: (
             item["cumple_documento"],
             item["cumple_asunto"],
-            item["cumple_evento"],
             item["cumple_correo"],
+            item["cumple_evento"],
             item["cumple_plazo"],
             item["score_total"],
             item["score_evento"],
