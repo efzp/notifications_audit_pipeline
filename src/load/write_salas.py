@@ -58,7 +58,10 @@ def _fetch_calificacion_case_id_map(
             normalize_radicado(row.get("numero_radicado")),
             normalize_document(row.get("cedula")),
         )
-        for row in result.get("tabla_notificaciones") or []
+        for row in [
+            *(result.get("tabla_notificaciones") or []),
+            *(result.get("tabla_casos") or []),
+        ]
         if normalize_radicado(row.get("numero_radicado"))
     }
     radicados = sorted({radicado for radicado, _ in keys if radicado})
@@ -110,12 +113,13 @@ def _fetch_fallback_correo_map(
                 "id_calificacion_sistema_envio",
                 "id_calificacion_sistema_caso",
                 "tipo_entidad",
+                "nombre_entidad",
                 "correo_reportado",
                 "correo_normalizado",
             ],
             (
                 "[activo] = ? "
-                "AND [correo_normalizado] IS NOT NULL "
+                "AND ([correo_normalizado] IS NOT NULL OR UPPER([tipo_entidad]) = 'ARL') "
                 f"AND [id_calificacion_sistema_caso] IN ({placeholders})"
             ),
             [1, *chunk],
