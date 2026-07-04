@@ -24,6 +24,7 @@ from src.utils.normalization import (
 
 
 SCRIPT_VERSION = "1.0"
+SYNTHETIC_FALLBACK_NOTIFICATION_TYPES = {"ARL"}
 
 GUIA_CORREO_FISICO_MAX_LENGTHS = {
     "hoja_origen": 255,
@@ -684,6 +685,94 @@ def prepare_notificacion_rows(
     fallback_correo_by_key: dict[tuple[int, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows = []
+    seen_business_hashes = set()
+    existing_by_case_and_type: set[tuple[int, str]] = set()
+    template_by_calificacion_case_id: dict[int, dict[str, Any]] = {}
+
+    def build_business_hash(mapped_row: dict[str, Any]) -> str:
+        return sha256_dict(
+            {
+                "id_calificacion_sistema_caso": mapped_row.get(
+                    "id_calificacion_sistema_caso"
+                ),
+                "numero_radicado_normalizado": mapped_row.get(
+                    "numero_radicado_normalizado"
+                ),
+                "cedula_normalizada": mapped_row.get("cedula_normalizada"),
+                "tipo_destinatario": mapped_row.get("tipo_destinatario"),
+                "correo_o_guia_reportado": clean_text(
+                    mapped_row.get("correo_o_guia_reportado")
+                ),
+                "correo_normalizado": mapped_row.get("correo_normalizado"),
+            }
+        )
+
+    def append_mapped_row(
+        mapped_row: dict[str, Any],
+        source_row: dict[str, Any],
+        default_origin: str,
+    ) -> None:
+        mapped_row["tabla_notificacion_json"] = json_dumps_safe(source_row)
+        mapped_row["origen_tabla"] = source_row.get("origen_tabla") or default_origin
+        mapped_row["activo"] = 1
+        mapped_row["fecha_creacion"] = utc_now_iso()
+        mapped_row["hash_negocio_notificacion"] = build_business_hash(mapped_row)
+        if mapped_row["hash_negocio_notificacion"] in seen_business_hashes:
+            return
+
+        hash_payload = {
+            key: value
+            for key, value in mapped_row.items()
+            if key not in {"tabla_notificacion_json", "hash_notificacion_esperada"}
+        }
+        mapped_row["hash_notificacion_esperada"] = sha256_dict(hash_payload)
+        seen_business_hashes.add(mapped_row["hash_negocio_notificacion"])
+        rows.append(mapped_row)
+
+        id_calificacion = mapped_row.get("id_calificacion_sistema_caso")
+        tipo_destinatario = mapped_row.get("tipo_destinatario")
+        if id_calificacion is not None and tipo_destinatario:
+            existing_by_case_and_type.add((int(id_calificacion), tipo_destinatario))
+            template_by_calificacion_case_id.setdefault(int(id_calificacion), mapped_row)
+
+    def template_from_case_source(source_row: dict[str, Any]) -> dict[str, Any] | None:
+        numero_radicado_normalizado = normalize_radicado(source_row.get("numero_radicado"))
+        cedula_normalizada = normalize_document(source_row.get("cedula"))
+        if not numero_radicado_normalizado:
+            return None
+
+        id_calificacion = None
+        if calificacion_caso_id_by_key:
+            id_calificacion = (
+                calificacion_caso_id_by_key.get(
+                    (numero_radicado_normalizado, cedula_normalizada)
+                )
+                or calificacion_caso_id_by_key.get((numero_radicado_normalizado, None))
+            )
+        if id_calificacion is None:
+            return None
+
+        return {
+            "id_archivo": id_archivo,
+            "id_caso": caso_id_by_radicado.get(numero_radicado_normalizado)
+            if caso_id_by_radicado
+            else None,
+            "id_calificacion_sistema_caso": id_calificacion,
+            "numero_radicado": source_row.get("numero_radicado"),
+            "numero_radicado_normalizado": numero_radicado_normalizado,
+            "cedula": source_row.get("cedula"),
+            "cedula_normalizada": cedula_normalizada,
+            "pestana_nombre": source_row.get("pestana_nombre"),
+            "pestana_fecha": normalize_date(source_row.get("pestana_fecha")),
+            "pestana_sala_normalizada": source_row.get("pestana_sala_normalizada"),
+            "hoja_trabajo_sala": source_row.get("hoja_trabajo_sala"),
+            "hoja_trabajo_sala_normalizada": source_row.get(
+                "hoja_trabajo_sala_normalizada"
+            ),
+            "hoja_trabajo_fecha_audiencia": normalize_date(
+                source_row.get("hoja_trabajo_fecha_audiencia")
+            ),
+        }
 
     for source_row in result.get("tabla_notificaciones") or []:
         mapped_row = map_fields(source_row, NOTIFICACION_FIELD_MAP)
@@ -752,34 +841,58 @@ def prepare_notificacion_rows(
                     "id_calificacion_sistema_envio"
                 )
 
-        mapped_row["tabla_notificacion_json"] = json_dumps_safe(source_row)
-        mapped_row["origen_tabla"] = source_row.get("origen_tabla") or "tabla_notificaciones"
-        mapped_row["activo"] = 1
-        mapped_row["fecha_creacion"] = utc_now_iso()
-        mapped_row["hash_negocio_notificacion"] = sha256_dict(
-            {
-                "id_calificacion_sistema_caso": mapped_row.get(
-                    "id_calificacion_sistema_caso"
-                ),
-                "numero_radicado_normalizado": mapped_row.get(
-                    "numero_radicado_normalizado"
-                ),
-                "cedula_normalizada": mapped_row.get("cedula_normalizada"),
-                "tipo_destinatario": mapped_row.get("tipo_destinatario"),
-                "correo_o_guia_reportado": clean_text(
-                    mapped_row.get("correo_o_guia_reportado")
-                ),
-                "correo_normalizado": mapped_row.get("correo_normalizado"),
-            }
-        )
+        append_mapped_row(mapped_row, source_row, "tabla_notificaciones")
 
-        hash_payload = {
-            key: value
-            for key, value in mapped_row.items()
-            if key not in {"tabla_notificacion_json", "hash_notificacion_esperada"}
+    for source_row in result.get("tabla_casos") or []:
+        template = template_from_case_source(source_row)
+        if template and template.get("id_calificacion_sistema_caso") is not None:
+            template_by_calificacion_case_id.setdefault(
+                int(template["id_calificacion_sistema_caso"]),
+                template,
+            )
+
+    for (id_calificacion, tipo_destinatario), fallback in sorted(
+        (fallback_correo_by_key or {}).items()
+    ):
+        if tipo_destinatario not in SYNTHETIC_FALLBACK_NOTIFICATION_TYPES:
+            continue
+        if (id_calificacion, tipo_destinatario) in existing_by_case_and_type:
+            continue
+
+        template = template_by_calificacion_case_id.get(int(id_calificacion))
+        if not template:
+            continue
+
+        fallback_email = clean_text(fallback.get("correo_reportado"))
+        synthetic_source = {
+            "origen_tabla": "CALIFICACION_SISTEMA_ENVIO_SINTETICO",
+            "tipo_destinatario": tipo_destinatario,
+            "nombre_entidad": fallback.get("nombre_entidad"),
+            "correo_reportado": fallback_email,
+            "id_calificacion_sistema_envio": fallback.get(
+                "id_calificacion_sistema_envio"
+            ),
         }
-        mapped_row["hash_notificacion_esperada"] = sha256_dict(hash_payload)
-        rows.append(mapped_row)
+        mapped_row = {
+            **template,
+            "tipo_destinatario": tipo_destinatario,
+            "fecha_envio_reportada": None,
+            "fecha_recibido_reportada": None,
+            "correo_o_guia_reportado": fallback_email,
+            "correo_normalizado": fallback.get("correo_normalizado")
+            or normalize_email(fallback_email),
+            "id_calificacion_sistema_envio_fallback": fallback.get(
+                "id_calificacion_sistema_envio"
+            ),
+            "fuente_correo_reportado": "CALIFICACION_SISTEMA_ENVIO"
+            if fallback_email
+            else "CALIFICACION_SISTEMA_ENTIDAD",
+        }
+        append_mapped_row(
+            mapped_row,
+            synthetic_source,
+            "CALIFICACION_SISTEMA_ENVIO_SINTETICO",
+        )
 
     return rows
 
