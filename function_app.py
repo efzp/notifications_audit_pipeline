@@ -238,33 +238,62 @@ def handle_sql_processing(
 ) -> func.HttpResponse:
     logging.info("%s ejecutada", route_name)
     id_archivo = None
+    id_archivo_solicitud = None
 
     try:
         payload = get_request_payload(req)
-        id_archivo = get_id_archivo(payload)
+        id_archivo_solicitud = get_id_archivo(payload)
+        id_archivo = (
+            parse_optional_int(payload, "id_archivo_reproceso")
+            or parse_optional_int(payload, "id_archivo_destino")
+            or id_archivo_solicitud
+        )
+        force_reprocess = parse_bool(payload, "forzar_reproceso", False)
         hash_archivo = compute_payload_file_hash(payload)
-        register_file_hash(id_archivo, hash_archivo)
+        register_file_hash(id_archivo_solicitud, hash_archivo)
+        if id_archivo != id_archivo_solicitud:
+            register_file_hash(id_archivo, hash_archivo)
 
         duplicate_row = find_processed_duplicate(
             id_archivo,
             payload.get("tipo_archivo"),
             hash_archivo,
         )
-        if duplicate_row:
+        if duplicate_row and not force_reprocess:
             return build_json_response(
                 mark_duplicate_file(id_archivo, hash_archivo, duplicate_row),
                 status_code=200,
             )
 
         result = processor(payload)
+        if force_reprocess:
+            result["_forzar_reproceso"] = True
         if "recalcular_cruce" in payload:
             result["_recalcular_cruce"] = parse_bool(payload, "recalcular_cruce", True)
         summary = writer(id_archivo, result)
+        if id_archivo != id_archivo_solicitud:
+            db.execute_update(
+                "jnc.etl_archivo_cargado",
+                "id_archivo",
+                id_archivo_solicitud,
+                {
+                    "estado_proceso": "DUPLICADO",
+                    "mensaje_error": (
+                        "Reproceso redirigido al id_archivo="
+                        f"{id_archivo}."
+                    ),
+                    "fecha_fin_proceso": utc_now_iso(),
+                },
+            )
+            summary["id_archivo_solicitud"] = id_archivo_solicitud
+            summary["id_archivo_reprocesado"] = id_archivo
         return build_json_response(summary, status_code=200)
     except Exception as exc:
         logging.exception("Error procesando %s", route_name)
         message = str(exc)
         mark_processing_error(id_archivo, message)
+        if id_archivo_solicitud is not None and id_archivo_solicitud != id_archivo:
+            mark_processing_error(id_archivo_solicitud, message)
         return build_json_response(
             {
                 "status": "ERROR_PROCESAMIENTO",

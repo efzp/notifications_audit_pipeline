@@ -116,8 +116,14 @@ EXCLUDED_NOTIFICATION_EMAIL_VALUES = {
     "no_informa",
     "no_informan",
     "no_informado",
+    "no_refiere",
+    "no_refieren",
     "no_reporta",
     "no_reportan",
+    "sin_dato",
+    "sin_datos",
+    "no_cuenta",
+    "no_cuenta_con",
     "independiente",
     "sin_correo",
     "sin_email",
@@ -127,7 +133,11 @@ EXCLUDED_NOTIFICATION_EMAIL_FUZZY_VALUES = {
 }
 EXCLUDED_NOTIFICATION_EMAIL_FUZZY_PHRASES = {
     "independiente",
+    "sin_dato",
+    "sin_datos",
     "no_informa",
+    "no_refiere",
+    "no_cuenta",
 }
 EXCLUDED_NOTIFICATION_EMAIL_FUZZY_THRESHOLD = 0.88
 

@@ -58,7 +58,10 @@ def _fetch_calificacion_case_id_map(
             normalize_radicado(row.get("numero_radicado")),
             normalize_document(row.get("cedula")),
         )
-        for row in result.get("tabla_notificaciones") or []
+        for row in [
+            *(result.get("tabla_notificaciones") or []),
+            *(result.get("tabla_casos") or []),
+        ]
         if normalize_radicado(row.get("numero_radicado"))
     }
     radicados = sorted({radicado for radicado, _ in keys if radicado})
@@ -110,12 +113,13 @@ def _fetch_fallback_correo_map(
                 "id_calificacion_sistema_envio",
                 "id_calificacion_sistema_caso",
                 "tipo_entidad",
+                "nombre_entidad",
                 "correo_reportado",
                 "correo_normalizado",
             ],
             (
                 "[activo] = ? "
-                "AND [correo_normalizado] IS NOT NULL "
+                "AND ([correo_normalizado] IS NOT NULL OR UPPER([tipo_entidad]) = 'ARL') "
                 f"AND [id_calificacion_sistema_caso] IN ({placeholders})"
             ),
             [1, *chunk],
@@ -183,6 +187,18 @@ def _filter_new_business_notifications(
     return filtered_rows, skipped
 
 
+def _all_business_notifications_exist(rows: list[dict[str, Any]]) -> bool:
+    hashes = {
+        row.get("hash_negocio_notificacion")
+        for row in rows
+        if row.get("hash_negocio_notificacion")
+    }
+    if not hashes or len(hashes) != len(rows):
+        return False
+
+    return hashes.issubset(_existing_hashes_by_business_hash(rows))
+
+
 def _chunks(values: list[Any], size: int = 900):
     for index in range(0, len(values), size):
         yield values[index : index + size]
@@ -217,6 +233,55 @@ def _delete_raw_rows_for_consolidated_radicados(radicados: list[str]) -> dict[st
     return {
         "notificaciones_raw_eliminadas": deleted_notifications,
         "casos_raw_eliminados": deleted_cases,
+    }
+
+
+def _delete_superseded_rows_for_consolidated_radicados(
+    id_archivo: int,
+    radicados: list[str],
+) -> dict[str, int]:
+    clean_radicados = sorted({radicado for radicado in radicados if radicado})
+    if not clean_radicados:
+        return {
+            "notificaciones_reemplazadas": 0,
+            "casos_reemplazados": 0,
+            "cruces_reemplazados": 0,
+            "pendientes_reemplazados": 0,
+        }
+
+    deleted_notifications = 0
+    deleted_cases = 0
+    deleted_crosses = 0
+    deleted_pending = 0
+    for chunk in _chunks(clean_radicados):
+        placeholders = ", ".join("?" for _ in chunk)
+        params = [id_archivo, *chunk]
+        where = (
+            "(id_archivo IS NULL OR id_archivo <> ?) "
+            f"AND numero_radicado_normalizado IN ({placeholders})"
+        )
+        deleted_pending += db.execute_sql(
+            f"DELETE FROM jnc.cruce_notificacion_pendiente WHERE {where}",
+            params,
+        )
+        deleted_crosses += db.execute_sql(
+            f"DELETE FROM jnc.resultado_cruce_notificacion WHERE {where}",
+            params,
+        )
+        deleted_notifications += db.execute_sql(
+            f"DELETE FROM jnc.notificacion_esperada WHERE {where}",
+            params,
+        )
+        deleted_cases += db.execute_sql(
+            f"DELETE FROM jnc.caso_calificado WHERE {where}",
+            params,
+        )
+
+    return {
+        "notificaciones_reemplazadas": deleted_notifications,
+        "casos_reemplazados": deleted_cases,
+        "cruces_reemplazados": deleted_crosses,
+        "pendientes_reemplazados": deleted_pending,
     }
 
 
@@ -305,6 +370,8 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         "reglas_insertadas": 0,
         "cruce_notificaciones": {},
         "prioridad_consolidado": {},
+        "vigencia_consolidado": {},
+        "duplicado_consolidado_omitido": False,
         "backfill_sala": {},
         "timings": {},
         "mensaje": "Resultado de salas escrito en Azure SQL",
@@ -378,7 +445,67 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                 "prepare_caso_calificado",
                 lambda: prepare_caso_rows(id_archivo, result),
             )
-            if result.get("modo_procesamiento") != RAW_ORIGIN:
+            duplicado_consolidado_omitido = False
+            calificacion_caso_id_by_key = None
+            fallback_correo_by_key = None
+            if (
+                result.get("modo_procesamiento") != RAW_ORIGIN
+                and not result.get("_forzar_reproceso")
+            ):
+                consolidated_radicados = [
+                    row.get("numero_radicado_normalizado")
+                    for row in caso_rows
+                ]
+                calificacion_caso_id_by_key = timed_step(
+                    timings,
+                    "fetch_calificacion_sistema_caso_id_map_precheck",
+                    lambda: _fetch_calificacion_case_id_map(result),
+                )
+                fallback_correo_by_key = timed_step(
+                    timings,
+                    "fetch_fallback_correo_calificacion_precheck",
+                    lambda: _fetch_fallback_correo_map(
+                        _calificacion_case_ids(calificacion_caso_id_by_key)
+                    ),
+                )
+                notificacion_rows_precheck = timed_step(
+                    timings,
+                    "prepare_notificacion_esperada_precheck",
+                    lambda: prepare_notificacion_rows(
+                        id_archivo,
+                        result,
+                        {},
+                        calificacion_caso_id_by_key,
+                        fallback_correo_by_key,
+                    ),
+                )
+                notificacion_rows_precheck = [
+                    row
+                    for row in notificacion_rows_precheck
+                    if row.get("id_caso") is not None
+                    or row.get("id_calificacion_sistema_caso") is not None
+                ]
+                duplicado_consolidado_omitido = timed_step(
+                    timings,
+                    "check_duplicado_consolidado",
+                    lambda: _all_business_notifications_exist(
+                        notificacion_rows_precheck
+                    ),
+                )
+                summary["duplicado_consolidado_omitido"] = duplicado_consolidado_omitido
+                if duplicado_consolidado_omitido:
+                    summary["notificaciones_duplicadas_omitidas"] = len(
+                        notificacion_rows_precheck
+                    )
+                else:
+                    summary["prioridad_consolidado"] = timed_step(
+                        timings,
+                        "delete_raw_prioridad_consolidado",
+                        lambda: _delete_raw_rows_for_consolidated_radicados(
+                            consolidated_radicados
+                        ),
+                    )
+            elif result.get("modo_procesamiento") != RAW_ORIGIN:
                 consolidated_radicados = [
                     row.get("numero_radicado_normalizado")
                     for row in caso_rows
@@ -390,62 +517,74 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                         consolidated_radicados
                     ),
                 )
-            summary["casos_insertados"] = timed_step(
-                timings,
-                "insert_caso_calificado",
-                lambda: db.insert_many("jnc.caso_calificado", caso_rows),
-            )
+            if not duplicado_consolidado_omitido:
+                summary["casos_insertados"] = timed_step(
+                    timings,
+                    "insert_caso_calificado",
+                    lambda: db.insert_many("jnc.caso_calificado", caso_rows),
+                )
+                if result.get("modo_procesamiento") != RAW_ORIGIN:
+                    summary["vigencia_consolidado"] = timed_step(
+                        timings,
+                        "delete_superseded_rows_consolidado",
+                        lambda: _delete_superseded_rows_for_consolidated_radicados(
+                            id_archivo,
+                            consolidated_radicados,
+                        ),
+                    )
 
-            caso_id_by_radicado = timed_step(
-                timings,
-                "fetch_caso_id_map",
-                lambda: _fetch_case_id_map(id_archivo),
-            )
-            calificacion_caso_id_by_key = timed_step(
-                timings,
-                "fetch_calificacion_sistema_caso_id_map",
-                lambda: _fetch_calificacion_case_id_map(result),
-            )
-            fallback_correo_by_key = timed_step(
-                timings,
-                "fetch_fallback_correo_calificacion",
-                lambda: _fetch_fallback_correo_map(
-                    _calificacion_case_ids(calificacion_caso_id_by_key)
-                ),
-            )
-            notificacion_rows = timed_step(
-                timings,
-                "prepare_notificacion_esperada",
-                lambda: prepare_notificacion_rows(
-                    id_archivo,
-                    result,
-                    caso_id_by_radicado,
-                    calificacion_caso_id_by_key,
-                    fallback_correo_by_key,
-                ),
-            )
-            notificacion_rows = [
-                row
-                for row in notificacion_rows
-                if row.get("id_caso") is not None
-                or row.get("id_calificacion_sistema_caso") is not None
-            ]
-            notificacion_rows, skipped_duplicates = timed_step(
-                timings,
-                "filter_notificacion_esperada_hash_negocio",
-                lambda: _filter_new_business_notifications(notificacion_rows),
-            )
-            summary["notificaciones_duplicadas_omitidas"] = skipped_duplicates
-            summary["notificaciones_insertadas"] = timed_step(
-                timings,
-                "insert_notificacion_esperada",
-                lambda: db.insert_many("jnc.notificacion_esperada", notificacion_rows),
-            )
-            summary["backfill_sala"] = timed_step(
-                timings,
-                "backfill_sala_desde_calificacion_sistema_caso",
-                _backfill_sala_from_calificacion_sistema_caso,
-            )
+                caso_id_by_radicado = timed_step(
+                    timings,
+                    "fetch_caso_id_map",
+                    lambda: _fetch_case_id_map(id_archivo),
+                )
+                if calificacion_caso_id_by_key is None:
+                    calificacion_caso_id_by_key = timed_step(
+                        timings,
+                        "fetch_calificacion_sistema_caso_id_map",
+                        lambda: _fetch_calificacion_case_id_map(result),
+                    )
+                if fallback_correo_by_key is None:
+                    fallback_correo_by_key = timed_step(
+                        timings,
+                        "fetch_fallback_correo_calificacion",
+                        lambda: _fetch_fallback_correo_map(
+                            _calificacion_case_ids(calificacion_caso_id_by_key)
+                        ),
+                    )
+                notificacion_rows = timed_step(
+                    timings,
+                    "prepare_notificacion_esperada",
+                    lambda: prepare_notificacion_rows(
+                        id_archivo,
+                        result,
+                        caso_id_by_radicado,
+                        calificacion_caso_id_by_key,
+                        fallback_correo_by_key,
+                    ),
+                )
+                notificacion_rows = [
+                    row
+                    for row in notificacion_rows
+                    if row.get("id_caso") is not None
+                    or row.get("id_calificacion_sistema_caso") is not None
+                ]
+                notificacion_rows, skipped_duplicates = timed_step(
+                    timings,
+                    "filter_notificacion_esperada_hash_negocio",
+                    lambda: _filter_new_business_notifications(notificacion_rows),
+                )
+                summary["notificaciones_duplicadas_omitidas"] = skipped_duplicates
+                summary["notificaciones_insertadas"] = timed_step(
+                    timings,
+                    "insert_notificacion_esperada",
+                    lambda: db.insert_many("jnc.notificacion_esperada", notificacion_rows),
+                )
+                summary["backfill_sala"] = timed_step(
+                    timings,
+                    "backfill_sala_desde_calificacion_sistema_caso",
+                    _backfill_sala_from_calificacion_sistema_caso,
+                )
 
         summary["errores_insertados"] = timed_step(
             timings,
@@ -475,7 +614,7 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
             ),
         )
 
-        if result.get("status") == "OK":
+        if result.get("status") == "OK" and not summary["duplicado_consolidado_omitido"]:
             summary["cruce_notificaciones"] = timed_step(
                 timings,
                 "recalcular_cruce_notificaciones",

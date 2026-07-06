@@ -1072,6 +1072,23 @@ def _arl_names_compatible(expected_value: Any, evidence_value: Any) -> bool:
     return bool(expected_marker and evidence_marker and expected_marker == evidence_marker)
 
 
+def _remitente_arl_channel_marker(value: Any) -> bool:
+    text = _normalize_match_text(value)
+    if not text:
+        return False
+
+    compact = text.replace(" ", "")
+    return (
+        compact.startswith("raent")
+        or compact.startswith("radent")
+        or compact.startswith("raentidad")
+        or compact.startswith("radentidad")
+        or compact.startswith("radplataforma")
+        or compact.startswith("app")
+        or "radicadoentidad" in compact
+    )
+
+
 def _score_arl_candidate(
     expected_row: dict[str, Any],
     arl_row: dict[str, Any],
@@ -1276,8 +1293,8 @@ def _best_candidate(
         key=lambda item: (
             item["cumple_documento"],
             item["cumple_asunto"],
-            item["cumple_evento"],
             item["cumple_correo"],
+            item["cumple_evento"],
             item["cumple_plazo"],
             item["score_total"],
             item["score_evento"],
@@ -1322,23 +1339,35 @@ def _best_arl_candidate(
 
 def _uses_arl_radicado_lookup(expected_row: dict[str, Any]) -> bool:
     tipo_destinatario = str(expected_row.get("tipo_destinatario") or "").upper()
+    arl_esperada = (
+        expected_row.get("arl_esperada_normalizada")
+        or expected_row.get("arl_esperada")
+    )
+
+    if not _arl_marker(arl_esperada):
+        return False
     if tipo_destinatario == "ARL":
         return True
     if tipo_destinatario != "REMITENTE":
         return False
 
-    arl_esperada = (
-        expected_row.get("arl_esperada_normalizada")
-        or expected_row.get("arl_esperada")
+    remitente_candidates = [
+        expected_row.get("entidad_remitente_esperada_normalizada"),
+        expected_row.get("entidad_remitente_esperada"),
+        expected_row.get("nombre_entidad"),
+        expected_row.get("entidad_remitente"),
+        expected_row.get("correo_o_guia_reportado"),
+    ]
+    return (
+        any(
+            _arl_names_compatible(arl_esperada, candidate)
+            for candidate in remitente_candidates
+        )
+        or any(
+            _remitente_arl_channel_marker(candidate)
+            for candidate in remitente_candidates
+        )
     )
-    entidad_remitente = (
-        expected_row.get("entidad_remitente_esperada_normalizada")
-        or expected_row.get("entidad_remitente_esperada")
-        or expected_row.get("nombre_entidad")
-        or expected_row.get("entidad_remitente")
-        or expected_row.get("correo_o_guia_reportado")
-    )
-    return _arl_names_compatible(arl_esperada, entidad_remitente)
 
 
 def _best_guia_candidate(
