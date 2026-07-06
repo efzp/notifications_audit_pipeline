@@ -3,6 +3,7 @@ from typing import Any
 from src.load import db
 from src.load.prepare_sql_rows import (
     prepare_archivo_update_from_audiencias_result,
+    prepare_audiencia_caso_rows,
     prepare_error_rows,
     prepare_estructura_acta_rows,
     prepare_regla_rows,
@@ -15,6 +16,7 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
         "status": "OK",
         "id_archivo": id_archivo,
         "estructuras_acta_insertadas": 0,
+        "audiencias_caso_insertadas": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
         "timings": {},
@@ -35,6 +37,11 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
             ),
         )
 
+        timed_step(
+            timings,
+            "delete_audiencia_caso",
+            lambda: db.delete_by_archivo("jnc.audiencia_caso", id_archivo),
+        )
         timed_step(
             timings,
             "delete_etl_estructura_acta",
@@ -58,6 +65,13 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
             if result.get("status") == "OK"
             else [],
         )
+        audiencia_caso_rows = timed_step(
+            timings,
+            "prepare_audiencia_caso",
+            lambda: prepare_audiencia_caso_rows(id_archivo, result)
+            if result.get("status") == "OK"
+            else [],
+        )
         error_rows = timed_step(
             timings,
             "prepare_error_rows",
@@ -73,6 +87,11 @@ def write_audiencias_result_to_sql(id_archivo: int, result: dict[str, Any]) -> d
             timings,
             "insert_etl_estructura_acta",
             lambda: db.insert_many("jnc.etl_estructura_acta", estructura_rows),
+        )
+        summary["audiencias_caso_insertadas"] = timed_step(
+            timings,
+            "insert_audiencia_caso",
+            lambda: db.insert_many("jnc.audiencia_caso", audiencia_caso_rows),
         )
         summary["errores_insertados"] = timed_step(
             timings,

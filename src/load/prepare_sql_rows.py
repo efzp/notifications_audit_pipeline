@@ -162,6 +162,39 @@ ESTRUCTURA_ACTA_HASH_EXCLUDED_FIELDS = {
     "fecha_creacion",
 }
 
+AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS = {
+    "id_archivo",
+    "id_estructura_acta",
+    "fila_caso_json",
+    "hash_audiencia_caso",
+    "activo",
+    "fecha_creacion",
+    "fecha_actualizacion",
+}
+
+AUDIENCIA_CASO_MAX_LENGTHS = {
+    "numero_acta": 100,
+    "numero_acta_normalizado": 100,
+    "sala": 255,
+    "sala_normalizada": 50,
+    "numero_radicado": 100,
+    "numero_radicado_normalizado": 100,
+    "nombre_paciente": 500,
+    "nombre_paciente_normalizado": 500,
+    "tipo_identificacion": 50,
+    "numero_identificacion": 50,
+    "numero_identificacion_normalizado": 50,
+    "entidad_remitente": 500,
+    "entidad_remitente_normalizado": 500,
+    "medico_ponente": 500,
+    "medico_ponente_normalizado": 500,
+    "medico_principal": 500,
+    "medico_principal_normalizado": 500,
+    "terapeuta_psicologa": 500,
+    "terapeuta_psicologa_normalizado": 500,
+    "hash_audiencia_caso": 64,
+}
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
 
@@ -852,6 +885,71 @@ def prepare_estructura_acta_rows(
     return rows
 
 
+def prepare_audiencia_caso_rows(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = []
+
+    for source_row in result.get("tabla_audiencia_caso") or []:
+        mapped_row = {
+            "id_archivo": id_archivo,
+            "numero_acta": clean_text(source_row.get("numero_acta")),
+            "numero_acta_normalizado": normalize_db_string(
+                source_row.get("numero_acta_normalizado")
+                or source_row.get("numero_acta")
+            ),
+            "fecha_audiencia": normalize_date(source_row.get("fecha_audiencia")),
+            "sala": clean_text(source_row.get("sala")),
+            "sala_normalizada": normalize_db_string(
+                source_row.get("sala_normalizada") or source_row.get("sala")
+            ),
+            "numero_orden": source_row.get("numero_orden"),
+            "numero_radicado": clean_text(source_row.get("numero_radicado")),
+            "numero_radicado_normalizado": normalize_radicado(
+                source_row.get("numero_radicado")
+            ),
+            "nombre_paciente": clean_text(source_row.get("nombre_paciente")),
+            "nombre_paciente_normalizado": normalize_db_string(
+                source_row.get("nombre_paciente")
+            ),
+            "tipo_identificacion": clean_text(source_row.get("tipo_identificacion")),
+            "numero_identificacion": clean_text(source_row.get("numero_identificacion")),
+            "numero_identificacion_normalizado": normalize_document(
+                source_row.get("numero_identificacion")
+            ),
+            "entidad_remitente": clean_text(source_row.get("entidad_remitente")),
+            "entidad_remitente_normalizado": normalize_db_string(
+                source_row.get("entidad_remitente")
+            ),
+            "medico_ponente": clean_text(source_row.get("medico_ponente")),
+            "medico_ponente_normalizado": normalize_db_string(
+                source_row.get("medico_ponente")
+            ),
+            "medico_principal": clean_text(source_row.get("medico_principal")),
+            "medico_principal_normalizado": normalize_db_string(
+                source_row.get("medico_principal")
+            ),
+            "terapeuta_psicologa": clean_text(source_row.get("terapeuta_psicologa")),
+            "terapeuta_psicologa_normalizado": normalize_db_string(
+                source_row.get("terapeuta_psicologa")
+            ),
+            "fila_texto": clean_text(source_row.get("fila_texto")),
+            "fila_caso_json": json_dumps_safe(source_row.get("fila_caso") or source_row),
+            "fecha_creacion": utc_now_iso(),
+        }
+
+        mapped_row = truncate_text_fields(mapped_row, AUDIENCIA_CASO_MAX_LENGTHS)
+        hash_payload = business_hash_payload(
+            mapped_row,
+            AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS,
+        )
+        mapped_row["hash_audiencia_caso"] = sha256_dict(hash_payload)
+        rows.append(mapped_row)
+
+    return rows
+
+
 def prepare_arl_radicado_rows(id_archivo: int, result: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for source_row in result.get("tabla_arls_radicado_pdf") or []:
@@ -1308,6 +1406,7 @@ def prepare_all_from_audiencias_result(id_archivo: int, result: dict[str, Any]) 
             result,
         ),
         "jnc.etl_estructura_acta": prepare_estructura_acta_rows(id_archivo, result),
+        "jnc.audiencia_caso": prepare_audiencia_caso_rows(id_archivo, result),
         "jnc.etl_error_procesamiento": prepare_error_rows(id_archivo, result),
         "jnc.etl_ejecucion_regla": prepare_regla_rows(
             id_archivo,

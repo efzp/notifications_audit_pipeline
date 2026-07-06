@@ -15,6 +15,7 @@ ALLOWED_TABLES = {
     "jnc.notificacion_arl_radicado",
     "jnc.guia_correo_fisico",
     "jnc.etl_estructura_acta",
+    "jnc.audiencia_caso",
     "jnc.etl_error_procesamiento",
     "jnc.etl_ejecucion_regla",
     "jnc.resultado_cruce_notificacion",
