@@ -372,37 +372,70 @@ CREATE TABLE jnc.etl_estructura_acta (
 CREATE TABLE jnc.audiencia_caso (
     id_audiencia_caso BIGINT IDENTITY(1,1) NOT NULL
         CONSTRAINT PK_audiencia_caso PRIMARY KEY,
-    id_estructura_acta BIGINT NULL,
     id_archivo INT NOT NULL,
-    numero_acta NVARCHAR(100) NULL,
-    numero_acta_normalizado NVARCHAR(100) NULL,
-    fecha_audiencia DATE NULL,
-    sala NVARCHAR(255) NULL,
-    sala_normalizada NVARCHAR(255) NULL,
-    numero_orden INT NULL,
-    numero_radicado NVARCHAR(100) NULL,
-    numero_radicado_normalizado NVARCHAR(100) NULL,
-    nombre_paciente NVARCHAR(500) NULL,
-    nombre_paciente_normalizado NVARCHAR(500) NULL,
-    tipo_identificacion NVARCHAR(50) NULL,
-    numero_identificacion NVARCHAR(50) NULL,
-    numero_identificacion_normalizado NVARCHAR(50) NULL,
-    entidad_remitente NVARCHAR(500) NULL,
-    entidad_remitente_normalizado NVARCHAR(500) NULL,
-    medico_ponente NVARCHAR(500) NULL,
-    medico_ponente_normalizado NVARCHAR(500) NULL,
-    medico_principal NVARCHAR(500) NULL,
-    medico_principal_normalizado NVARCHAR(500) NULL,
-    terapeuta_psicologa NVARCHAR(500) NULL,
-    terapeuta_psicologa_normalizado NVARCHAR(500) NULL,
-    fila_texto NVARCHAR(MAX) NULL,
-    fila_caso_json NVARCHAR(MAX) NULL,
+    documento_caso_json NVARCHAR(MAX) NOT NULL,
     hash_audiencia_caso NVARCHAR(64) NULL,
     activo BIT NOT NULL
         CONSTRAINT DF_audiencia_caso_activo DEFAULT (1),
     fecha_creacion DATETIME2(0) NOT NULL
         CONSTRAINT DF_audiencia_caso_fecha_creacion DEFAULT (SYSUTCDATETIME()),
-    fecha_actualizacion DATETIME2(0) NULL
+    fecha_actualizacion DATETIME2(0) NULL,
+    numero_radicado_normalizado AS
+        CONVERT(
+            NVARCHAR(100),
+            JSON_VALUE(documento_caso_json, '$.llaves_busqueda.numero_radicado_normalizado')
+        ),
+    numero_identificacion_normalizado AS
+        CONVERT(
+            NVARCHAR(50),
+            JSON_VALUE(documento_caso_json, '$.llaves_busqueda.numero_identificacion_normalizado')
+        ),
+    numero_acta_normalizado AS
+        CONVERT(
+            NVARCHAR(100),
+            JSON_VALUE(documento_caso_json, '$.llaves_busqueda.numero_acta_normalizado')
+        ),
+    fecha_audiencia AS
+        CONVERT(
+            DATE,
+            JSON_VALUE(documento_caso_json, '$.llaves_busqueda.fecha_audiencia'),
+            23
+        ),
+    sala_normalizada AS
+        CONVERT(
+            NVARCHAR(255),
+            JSON_VALUE(documento_caso_json, '$.llaves_busqueda.sala_normalizada')
+        ),
+    nombre_paciente_normalizado AS
+        CONVERT(
+            NVARCHAR(500),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.nombre_paciente_normalizado')
+        ),
+    tipo_identificacion AS
+        CONVERT(
+            NVARCHAR(50),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.tipo_identificacion')
+        ),
+    entidad_remitente_normalizado AS
+        CONVERT(
+            NVARCHAR(500),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.entidad_remitente_normalizado')
+        ),
+    medico_ponente_normalizado AS
+        CONVERT(
+            NVARCHAR(500),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.medico_ponente_normalizado')
+        ),
+    medico_principal_normalizado AS
+        CONVERT(
+            NVARCHAR(500),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.medico_principal_normalizado')
+        ),
+    terapeuta_psicologa_normalizado AS
+        CONVERT(
+            NVARCHAR(500),
+            JSON_VALUE(documento_caso_json, '$.datos_normalizados.terapeuta_psicologa_normalizado')
+        )
 );
 
 CREATE TABLE jnc.notificacion_esperada (
@@ -770,6 +803,27 @@ ON jnc.audiencia_caso (
     numero_radicado_normalizado,
     numero_identificacion_normalizado
 );
+
+CREATE INDEX IX_audiencia_caso_backfill
+ON jnc.audiencia_caso (
+    numero_radicado_normalizado,
+    numero_identificacion_normalizado,
+    fecha_audiencia
+)
+INCLUDE (
+    sala_normalizada,
+    numero_acta_normalizado,
+    id_archivo,
+    hash_audiencia_caso
+)
+WHERE activo = 1;
+
+CREATE UNIQUE INDEX UX_audiencia_caso_archivo_hash
+ON jnc.audiencia_caso (
+    id_archivo,
+    hash_audiencia_caso
+)
+WHERE hash_audiencia_caso IS NOT NULL;
 
 CREATE INDEX IX_resultado_cruce_notificacion_radicado
 ON jnc.resultado_cruce_notificacion (

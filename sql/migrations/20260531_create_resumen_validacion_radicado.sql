@@ -121,16 +121,16 @@ BEGIN
             ) AS sala_caso_calificado,
             CASE WHEN ac_resumen.id_audiencia_caso IS NULL THEN 0 ELSE 1 END
                 AS tiene_acta_audiencia,
-            ac_resumen.sala AS sala_audiencia_caso,
+            ac_resumen.sala_normalizada AS sala_audiencia_caso,
             ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
-            ac_resumen.nombre_paciente AS nombre_paciente_audiencia_caso
+            ac_resumen.nombre_paciente_normalizado AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
         OUTER APPLY (
             SELECT TOP (1)
                 ac.id_audiencia_caso,
-                ac.sala,
+                ac.sala_normalizada,
                 ac.fecha_audiencia,
-                ac.nombre_paciente
+                ac.nombre_paciente_normalizado
             FROM jnc.audiencia_caso AS ac
             WHERE ac.activo = 1
               AND ac.numero_radicado_normalizado = cc.numero_radicado_normalizado

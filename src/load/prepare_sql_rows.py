@@ -163,36 +163,7 @@ ESTRUCTURA_ACTA_HASH_EXCLUDED_FIELDS = {
     "fecha_creacion",
 }
 
-AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS = {
-    "id_archivo",
-    "id_estructura_acta",
-    "fila_caso_json",
-    "hash_audiencia_caso",
-    "activo",
-    "fecha_creacion",
-    "fecha_actualizacion",
-}
-
 AUDIENCIA_CASO_MAX_LENGTHS = {
-    "numero_acta": 100,
-    "numero_acta_normalizado": 100,
-    "sala": 255,
-    "sala_normalizada": 50,
-    "numero_radicado": 100,
-    "numero_radicado_normalizado": 100,
-    "nombre_paciente": 500,
-    "nombre_paciente_normalizado": 500,
-    "tipo_identificacion": 50,
-    "numero_identificacion": 50,
-    "numero_identificacion_normalizado": 50,
-    "entidad_remitente": 500,
-    "entidad_remitente_normalizado": 500,
-    "medico_ponente": 500,
-    "medico_ponente_normalizado": 500,
-    "medico_principal": 500,
-    "medico_principal_normalizado": 500,
-    "terapeuta_psicologa": 500,
-    "terapeuta_psicologa_normalizado": 500,
     "hash_audiencia_caso": 64,
 }
 
@@ -225,6 +196,22 @@ def truncate_text_fields(row: dict[str, Any], max_lengths: dict[str, int]) -> di
         else value
         for key, value in row.items()
     }
+
+
+def remove_none_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: clean_child
+            for key, child in value.items()
+            if (clean_child := remove_none_values(child)) not in (None, {}, [])
+        }
+    if isinstance(value, list):
+        return [
+            clean_child
+            for child in value
+            if (clean_child := remove_none_values(child)) not in (None, {}, [])
+        ]
+    return value
 
 
 def _prepare_archivo_identity_update(result: dict[str, Any]) -> dict[str, Any]:
@@ -1005,58 +992,70 @@ def prepare_audiencia_caso_rows(
     rows = []
 
     for source_row in result.get("tabla_audiencia_caso") or []:
+        fecha_audiencia = normalize_date(source_row.get("fecha_audiencia"))
+        numero_acta_normalizado = normalize_db_string(
+            source_row.get("numero_acta_normalizado") or source_row.get("numero_acta")
+        )
+        sala_normalizada = normalize_db_string(
+            source_row.get("sala_normalizada") or source_row.get("sala")
+        )
+        numero_radicado_normalizado = normalize_radicado(source_row.get("numero_radicado"))
+        numero_identificacion_normalizado = normalize_document(
+            source_row.get("numero_identificacion")
+        )
+        documento_caso = remove_none_values(
+            {
+                "llaves_busqueda": {
+                    "numero_radicado_normalizado": numero_radicado_normalizado,
+                    "numero_identificacion_normalizado": numero_identificacion_normalizado,
+                    "numero_acta_normalizado": numero_acta_normalizado,
+                    "fecha_audiencia": fecha_audiencia,
+                    "sala_normalizada": sala_normalizada,
+                },
+                "datos_normalizados": {
+                    "nombre_paciente_normalizado": normalize_db_string(
+                        source_row.get("nombre_paciente")
+                    ),
+                    "tipo_identificacion": clean_text(
+                        source_row.get("tipo_identificacion")
+                    ),
+                    "entidad_remitente_normalizado": normalize_db_string(
+                        source_row.get("entidad_remitente")
+                    ),
+                    "medico_ponente_normalizado": normalize_db_string(
+                        source_row.get("medico_ponente")
+                    ),
+                    "medico_principal_normalizado": normalize_db_string(
+                        source_row.get("medico_principal")
+                    ),
+                    "terapeuta_psicologa_normalizado": normalize_db_string(
+                        source_row.get("terapeuta_psicologa")
+                    ),
+                },
+                "origen_extraccion": {
+                    "numero_orden": source_row.get("numero_orden"),
+                    "fila_texto": clean_text(source_row.get("fila_texto")),
+                    "fila_caso": source_row.get("fila_caso") or source_row,
+                },
+            }
+        )
         mapped_row = {
             "id_archivo": id_archivo,
-            "numero_acta": clean_text(source_row.get("numero_acta")),
-            "numero_acta_normalizado": normalize_db_string(
-                source_row.get("numero_acta_normalizado")
-                or source_row.get("numero_acta")
-            ),
-            "fecha_audiencia": normalize_date(source_row.get("fecha_audiencia")),
-            "sala": clean_text(source_row.get("sala")),
-            "sala_normalizada": normalize_db_string(
-                source_row.get("sala_normalizada") or source_row.get("sala")
-            ),
-            "numero_orden": source_row.get("numero_orden"),
-            "numero_radicado": clean_text(source_row.get("numero_radicado")),
-            "numero_radicado_normalizado": normalize_radicado(
-                source_row.get("numero_radicado")
-            ),
-            "nombre_paciente": clean_text(source_row.get("nombre_paciente")),
-            "nombre_paciente_normalizado": normalize_db_string(
-                source_row.get("nombre_paciente")
-            ),
-            "tipo_identificacion": clean_text(source_row.get("tipo_identificacion")),
-            "numero_identificacion": clean_text(source_row.get("numero_identificacion")),
-            "numero_identificacion_normalizado": normalize_document(
-                source_row.get("numero_identificacion")
-            ),
-            "entidad_remitente": clean_text(source_row.get("entidad_remitente")),
-            "entidad_remitente_normalizado": normalize_db_string(
-                source_row.get("entidad_remitente")
-            ),
-            "medico_ponente": clean_text(source_row.get("medico_ponente")),
-            "medico_ponente_normalizado": normalize_db_string(
-                source_row.get("medico_ponente")
-            ),
-            "medico_principal": clean_text(source_row.get("medico_principal")),
-            "medico_principal_normalizado": normalize_db_string(
-                source_row.get("medico_principal")
-            ),
-            "terapeuta_psicologa": clean_text(source_row.get("terapeuta_psicologa")),
-            "terapeuta_psicologa_normalizado": normalize_db_string(
-                source_row.get("terapeuta_psicologa")
-            ),
-            "fila_texto": clean_text(source_row.get("fila_texto")),
-            "fila_caso_json": json_dumps_safe(source_row.get("fila_caso") or source_row),
+            "documento_caso_json": json_dumps_safe(documento_caso),
+            "activo": 1,
             "fecha_creacion": utc_now_iso(),
         }
 
         mapped_row = truncate_text_fields(mapped_row, AUDIENCIA_CASO_MAX_LENGTHS)
-        hash_payload = business_hash_payload(
-            mapped_row,
-            AUDIENCIA_CASO_HASH_EXCLUDED_FIELDS,
-        )
+        hash_payload = {
+            "llaves_busqueda": documento_caso.get("llaves_busqueda"),
+            "datos_normalizados": documento_caso.get("datos_normalizados"),
+            "origen_extraccion": {
+                "numero_orden": (
+                    documento_caso.get("origen_extraccion") or {}
+                ).get("numero_orden")
+            },
+        }
         mapped_row["hash_audiencia_caso"] = sha256_dict(hash_payload)
         rows.append(mapped_row)
 
