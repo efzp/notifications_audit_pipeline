@@ -128,9 +128,9 @@ BEGIN
         OUTER APPLY (
             SELECT TOP (1)
                 ac.id_audiencia_caso,
-                ac.sala_normalizada,
+                ac.sala_normalizada AS sala,
                 ac.fecha_audiencia,
-                ac.nombre_paciente_normalizado
+                ac.nombre_paciente_normalizado AS nombre_paciente
             FROM jnc.audiencia_caso AS ac
             WHERE ac.activo = 1
               AND ac.numero_radicado_normalizado = cc.numero_radicado_normalizado
