@@ -1,109 +1,19 @@
-/*
-Tabla cacheada para el resumen de validacion por radicado.
+SET XACT_ABORT ON;
+GO
 
-La Function refresca esta tabla ejecutando:
-EXEC jnc.refrescar_resumen_validacion_radicado;
-*/
-
-IF OBJECT_ID('jnc.resumen_validacion_radicado', 'U') IS NULL
-BEGIN
-    CREATE TABLE jnc.resumen_validacion_radicado (
-        id_resumen_validacion BIGINT IDENTITY(1,1) NOT NULL
-            CONSTRAINT PK_resumen_validacion_radicado PRIMARY KEY,
-        numero_radicado NVARCHAR(100) NULL,
-        numero_radicado_normalizado NVARCHAR(100) NULL,
-        nombre_pestana NVARCHAR(255) NULL,
-        sala NVARCHAR(255) NULL,
-        sala_acta NVARCHAR(255) NULL,
-        sala_caso_calificado NVARCHAR(255) NULL,
-        tiene_acta_audiencia BIT NOT NULL
-            CONSTRAINT DF_resumen_validacion_tiene_acta DEFAULT (0),
-        fecha_audiencia DATE NULL,
-        cedula NVARCHAR(50) NULL,
-        nombre_paciente NVARCHAR(500) NULL,
-        cruces_json NVARCHAR(MAX) NULL,
-        condicion_pacientes BIT NOT NULL,
-        condicion_pacientes_extemporaneo BIT NOT NULL,
-        condicion_regional BIT NOT NULL,
-        condicion_regional_extemporaneo BIT NOT NULL,
-        condicion_empleador BIT NOT NULL,
-        condicion_empleador_extemporaneo BIT NOT NULL,
-        condicion_remitente BIT NOT NULL,
-        condicion_remitente_extemporaneo BIT NOT NULL,
-        condicion_eps BIT NOT NULL,
-        condicion_eps_extemporaneo BIT NOT NULL,
-        condicion_afp BIT NOT NULL,
-        condicion_afp_extemporaneo BIT NOT NULL,
-        condicion_arl BIT NOT NULL,
-        condicion_arl_extemporaneo BIT NOT NULL,
-        condicion_aseguradoras BIT NOT NULL,
-        condicion_aseguradoras_extemporaneo BIT NOT NULL,
-        cumplimiento_total BIT NOT NULL,
-        cumplimiento_extemporaneo BIT NOT NULL,
-        no_cumplimiento_revision_manual NVARCHAR(500) NULL,
-        fecha_actualizacion_resumen DATETIME2(0) NOT NULL
-            CONSTRAINT DF_resumen_validacion_fecha_actualizacion DEFAULT (SYSUTCDATETIME())
-    );
-END;
-
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'cruces_json') IS NULL
-BEGIN
-    ALTER TABLE jnc.resumen_validacion_radicado
-        ADD cruces_json NVARCHAR(MAX) NULL;
-END;
-
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala') IS NULL
+IF OBJECT_ID('jnc.resumen_validacion_radicado', 'U') IS NOT NULL
+   AND COL_LENGTH('jnc.resumen_validacion_radicado', 'sala') IS NULL
 BEGIN
     ALTER TABLE jnc.resumen_validacion_radicado
         ADD sala NVARCHAR(255) NULL;
 END;
+GO
 
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala_acta') IS NULL
+IF OBJECT_ID('jnc.calificacion_sistema_caso', 'U') IS NOT NULL
+   AND COL_LENGTH('jnc.calificacion_sistema_caso', 'sala') IS NULL
 BEGIN
-    ALTER TABLE jnc.resumen_validacion_radicado
-        ADD sala_acta NVARCHAR(255) NULL;
-END;
-
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala_caso_calificado') IS NULL
-BEGIN
-    ALTER TABLE jnc.resumen_validacion_radicado
-        ADD sala_caso_calificado NVARCHAR(255) NULL;
-END;
-
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'tiene_acta_audiencia') IS NULL
-BEGIN
-    ALTER TABLE jnc.resumen_validacion_radicado
-        ADD tiene_acta_audiencia BIT NOT NULL
-            CONSTRAINT DF_resumen_validacion_tiene_acta DEFAULT (0);
-END;
-
-IF NOT EXISTS (
-    SELECT 1
-    FROM sys.indexes
-    WHERE name = 'UX_resumen_validacion_radicado'
-      AND object_id = OBJECT_ID('jnc.resumen_validacion_radicado')
-)
-BEGIN
-    CREATE UNIQUE INDEX UX_resumen_validacion_radicado
-    ON jnc.resumen_validacion_radicado (
-        numero_radicado_normalizado
-    )
-    WHERE numero_radicado_normalizado IS NOT NULL;
-END;
-
-IF NOT EXISTS (
-    SELECT 1
-    FROM sys.indexes
-    WHERE name = 'IX_resumen_validacion_estado'
-      AND object_id = OBJECT_ID('jnc.resumen_validacion_radicado')
-)
-BEGIN
-    CREATE INDEX IX_resumen_validacion_estado
-    ON jnc.resumen_validacion_radicado (
-        cumplimiento_total,
-        cumplimiento_extemporaneo,
-        fecha_audiencia
-    );
+    ALTER TABLE jnc.calificacion_sistema_caso
+        ADD sala NVARCHAR(255) NULL;
 END;
 GO
 
@@ -128,9 +38,9 @@ BEGIN
             csc_resumen.sala AS sala_calificacion_sistema_caso,
             CASE WHEN ac_resumen.id_audiencia_caso IS NULL THEN 0 ELSE 1 END
                 AS tiene_acta_audiencia,
-            ac_resumen.sala AS sala_audiencia_caso,
+            ac_resumen.sala_normalizada AS sala_audiencia_caso,
             ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
-            ac_resumen.nombre_paciente AS nombre_paciente_audiencia_caso
+            ac_resumen.nombre_paciente_normalizado AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
         OUTER APPLY (
             SELECT TOP (1)
@@ -154,9 +64,9 @@ BEGIN
         OUTER APPLY (
             SELECT TOP (1)
                 ac.id_audiencia_caso,
-                ac.sala_normalizada AS sala,
+                ac.sala_normalizada,
                 ac.fecha_audiencia,
-                ac.nombre_paciente_normalizado AS nombre_paciente
+                ac.nombre_paciente_normalizado
             FROM jnc.audiencia_caso AS ac
             WHERE ac.activo = 1
               AND ac.numero_radicado_normalizado = cc.numero_radicado_normalizado
@@ -466,8 +376,4 @@ BEGIN
 
     COMMIT TRANSACTION;
 END;
-GO
-
--- Carga inicial del cache si ya existen datos procesados.
-EXEC jnc.refrescar_resumen_validacion_radicado;
 GO

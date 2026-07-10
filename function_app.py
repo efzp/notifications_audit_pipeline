@@ -33,6 +33,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 
 def build_json_response(body: dict[str, Any], status_code: int = 200) -> func.HttpResponse:
+    """Construye una respuesta HTTP JSON uniforme para todos los endpoints."""
     return func.HttpResponse(
         json.dumps(body, ensure_ascii=False),
         status_code=status_code,
@@ -41,6 +42,7 @@ def build_json_response(body: dict[str, Any], status_code: int = 200) -> func.Ht
 
 
 def get_request_payload(req: func.HttpRequest) -> dict[str, Any]:
+    """Lee y valida que el body sea un objeto JSON."""
     try:
         payload = req.get_json()
     except ValueError as exc:
@@ -53,6 +55,7 @@ def get_request_payload(req: func.HttpRequest) -> dict[str, Any]:
 
 
 def get_optional_request_payload(req: func.HttpRequest) -> dict[str, Any]:
+    """Permite endpoints operativos con body opcional."""
     try:
         raw_body = req.get_body()
     except Exception:
@@ -65,6 +68,7 @@ def get_optional_request_payload(req: func.HttpRequest) -> dict[str, Any]:
 
 
 def get_id_archivo(payload: dict[str, Any]) -> int:
+    """Obtiene el id_archivo que identifica el registro ETL base."""
     raw_id = payload.get("id_archivo")
     if raw_id in (None, ""):
         raise ValueError("El payload debe incluir id_archivo")
@@ -121,6 +125,7 @@ def parse_optional_text(payload: dict[str, Any], field_name: str) -> str | None:
 
 
 def compute_payload_file_hash(payload: dict[str, Any]) -> str | None:
+    """Calcula hash del archivo recibido para detectar reprocesos duplicados."""
     raw_content = payload.get("file_content_base64")
     if not raw_content:
         return None
@@ -141,6 +146,7 @@ def find_processed_duplicate(
     tipo_archivo: str | None,
     hash_archivo: str | None,
 ) -> dict[str, Any] | None:
+    """Busca archivos ya procesados con el mismo hash antes de escribir de nuevo."""
     if not hash_archivo:
         return None
 
@@ -177,6 +183,7 @@ def mark_duplicate_file(
     hash_archivo: str,
     duplicate_row: dict[str, Any],
 ) -> dict[str, Any]:
+    """Marca el registro actual como duplicado y referencia el archivo original."""
     duplicate_id = duplicate_row.get("id_archivo")
     message = f"Archivo duplicado. Ya fue procesado previamente con id_archivo={duplicate_id}."
     db.execute_update(
@@ -200,6 +207,7 @@ def mark_duplicate_file(
 
 
 def register_file_hash(id_archivo: int, hash_archivo: str | None) -> None:
+    """Persistencia temprana del hash para trazabilidad del archivo recibido."""
     if not hash_archivo:
         return
 
@@ -212,6 +220,7 @@ def register_file_hash(id_archivo: int, hash_archivo: str | None) -> None:
 
 
 def mark_processing_error(id_archivo: int | None, message: str) -> None:
+    """Intenta reflejar errores del endpoint en etl_archivo_cargado."""
     if id_archivo is None:
         return
 
@@ -236,6 +245,15 @@ def handle_sql_processing(
     processor,
     writer,
 ) -> func.HttpResponse:
+    """
+    Orquestador comun para endpoints que procesan un archivo y escriben a SQL.
+
+    Flujo:
+    1. Lee payload e identifica el id_archivo efectivo.
+    2. Calcula hash del contenido y evita duplicados ya procesados.
+    3. Ejecuta el procesador especifico del tipo de archivo.
+    4. Delega la escritura transaccional al writer correspondiente.
+    """
     logging.info("%s ejecutada", route_name)
     id_archivo = None
     id_archivo_solicitud = None
@@ -310,6 +328,7 @@ def handle_read_processing(
     route_name: str,
     processor,
 ) -> func.HttpResponse:
+    """Orquestador para endpoints que solo transforman/leen y no escriben SQL."""
     logging.info("%s ejecutada", route_name)
 
     try:
@@ -329,6 +348,7 @@ def handle_read_processing(
 
 
 def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpResponse:
+    """Reejecuta reglas de cruce de notificaciones contra evidencia disponible."""
     logging.info("recalcular_cruce_notificaciones ejecutada")
 
     try:
@@ -394,6 +414,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
 
 
 def handle_aplicar_revision_manual_notificaciones(req: func.HttpRequest) -> func.HttpResponse:
+    """Aplica decisiones de revision manual sobre notificaciones pendientes."""
     logging.info("aplicar_revision_manual_notificaciones ejecutada")
 
     try:
@@ -430,6 +451,9 @@ def handle_aplicar_revision_manual_notificaciones(req: func.HttpRequest) -> func
             },
             status_code=500,
         )
+
+
+# Endpoints de ingesta: reciben archivo en base64, procesan contenido y escriben tablas SQL.
 
 
 @app.route(route="procesar_input_salas", methods=["POST"])
@@ -484,6 +508,7 @@ def procesar_revision_manual_notificaciones(req: func.HttpRequest) -> func.HttpR
 
 @app.route(route="procesar_revision_manual_guias", methods=["POST"])
 def procesar_revision_manual_guias_legacy(req: func.HttpRequest) -> func.HttpResponse:
+    # Alias legacy: mantiene compatibilidad con consumidores que aun llaman "guias".
     return procesar_revision_manual_notificaciones(req)
 
 
@@ -509,12 +534,16 @@ def procesar_calificaciones_software(req: func.HttpRequest) -> func.HttpResponse
 
 @app.route(route="procesar_sistema_jnc", methods=["POST"])
 def procesar_sistema_jnc(req: func.HttpRequest) -> func.HttpResponse:
+    # Alias funcional del procesador de calificaciones del sistema JNC.
     return handle_sql_processing(
         req,
         "procesar_sistema_jnc",
         procesador_calificaciones.process_payload_data,
         write_calificaciones_result_to_sql,
     )
+
+
+# Endpoints operativos: recalculan resultados derivados sin recibir un archivo nuevo.
 
 
 @app.route(route="recalcular_cruce_notificaciones", methods=["POST"])
@@ -529,4 +558,5 @@ def aplicar_revision_manual_notificaciones_route(req: func.HttpRequest) -> func.
 
 @app.route(route="aplicar_revision_manual_guias", methods=["POST"])
 def aplicar_revision_manual_guias_legacy_route(req: func.HttpRequest) -> func.HttpResponse:
+    # Alias legacy del endpoint actual de revision manual de notificaciones.
     return handle_aplicar_revision_manual_notificaciones(req)
