@@ -30,15 +30,10 @@ BEGIN
     WITH caso_base AS (
         SELECT
             cc.*,
-            COALESCE(
-                NULLIF(cc.hoja_trabajo_sala, ''),
-                NULLIF(cc.hoja_trabajo_sala_normalizada, ''),
-                NULLIF(cc.pestana_sala_normalizada, '')
-            ) AS sala_caso_calificado,
+            -- Fuente unica de sala para el resumen consolidado.
             csc_resumen.sala AS sala_calificacion_sistema_caso,
             CASE WHEN ac_resumen.id_audiencia_caso IS NULL THEN 0 ELSE 1 END
                 AS tiene_acta_audiencia,
-            ac_resumen.sala_normalizada AS sala_audiencia_caso,
             ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
             ac_resumen.nombre_paciente_normalizado AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
@@ -64,7 +59,6 @@ BEGIN
         OUTER APPLY (
             SELECT TOP (1)
                 ac.id_audiencia_caso,
-                ac.sala_normalizada,
                 ac.fecha_audiencia,
                 ac.nombre_paciente_normalizado
             FROM jnc.audiencia_caso AS ac
@@ -101,8 +95,6 @@ BEGIN
             cc.numero_radicado_normalizado,
             cc.pestana_nombre AS nombre_pestana,
             NULLIF(cc.sala_calificacion_sistema_caso, '') AS sala,
-            cc.sala_audiencia_caso AS sala_acta,
-            cc.sala_caso_calificado,
             CAST(MAX(cc.tiene_acta_audiencia) AS BIT) AS tiene_acta_audiencia,
             cc.fecha_audiencia_resumen AS fecha_audiencia,
             MAX(ne.cedula) AS cedula,
@@ -153,8 +145,6 @@ BEGIN
             cc.numero_radicado_normalizado,
             cc.pestana_nombre,
             cc.sala_calificacion_sistema_caso,
-            cc.sala_audiencia_caso,
-            cc.sala_caso_calificado,
             cc.fecha_audiencia_resumen,
             cc.nombre_paciente_audiencia_caso
     ),
@@ -164,8 +154,6 @@ BEGIN
             numero_radicado_normalizado,
             MAX(nombre_pestana) AS nombre_pestana,
             MAX(sala) AS sala,
-            MAX(sala_acta) AS sala_acta,
-            MAX(sala_caso_calificado) AS sala_caso_calificado,
             CAST(MAX(CAST(tiene_acta_audiencia AS INT)) AS BIT) AS tiene_acta_audiencia,
             MAX(fecha_audiencia) AS fecha_audiencia,
             MAX(cedula) AS cedula,
@@ -252,8 +240,6 @@ BEGIN
         numero_radicado_normalizado,
         nombre_pestana,
         sala,
-        sala_acta,
-        sala_caso_calificado,
         tiene_acta_audiencia,
         fecha_audiencia,
         cedula,
@@ -285,8 +271,6 @@ BEGIN
         rpr.numero_radicado_normalizado,
         rpr.nombre_pestana,
         rpr.sala,
-        rpr.sala_acta,
-        rpr.sala_caso_calificado,
         rpr.tiene_acta_audiencia,
         rpr.fecha_audiencia,
         rpr.cedula,
