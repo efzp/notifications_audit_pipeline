@@ -310,6 +310,7 @@ def _backfill_sala_from_calificacion_sistema_caso() -> dict[str, int]:
 
 
 def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[str, Any]:
+    recalcular_cruce = bool(result.get("_recalcular_cruce", False))
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
@@ -557,7 +558,11 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
             ),
         )
 
-        if result.get("status") == "OK" and not summary["duplicado_consolidado_omitido"]:
+        if (
+            result.get("status") == "OK"
+            and not summary["duplicado_consolidado_omitido"]
+            and recalcular_cruce
+        ):
             summary["cruce_notificaciones"] = timed_step(
                 timings,
                 "recalcular_cruce_notificaciones",
@@ -566,6 +571,22 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                     solo_pendientes=False,
                 ),
             )
+        else:
+            timings["recalcular_cruce_notificaciones"] = 0.0
+            if result.get("status") != "OK":
+                motivo_cruce_omitido = "resultado_salas_con_errores"
+            elif summary["duplicado_consolidado_omitido"]:
+                motivo_cruce_omitido = "duplicado_consolidado_omitido"
+            else:
+                motivo_cruce_omitido = "recalculo_desacoplado"
+            summary["cruce_notificaciones"] = {
+                "omitido": True,
+                "motivo": motivo_cruce_omitido,
+                "mensaje": (
+                    "El recalculo de cruces no se ejecuta automaticamente "
+                    "desde procesar_input_salas."
+                ),
+            }
 
         if result.get("status") != "OK":
             summary["status"] = "ERROR"

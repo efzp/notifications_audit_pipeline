@@ -3,9 +3,11 @@ import re
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
+from time import perf_counter
 from typing import Any
 
 from src.load import db
+from src.load.timing import timed_step
 from src.reconcile.resumen_validacion import refrescar_resumen_validacion_radicado
 from src.utils.normalization import (
     json_dumps_safe,
@@ -1968,14 +1970,20 @@ def recalcular_cruce_notificaciones(
     refrescar_resumen: bool = True,
     fuente_cruce: str | None = None,
 ) -> dict[str, Any]:
+    total_start = perf_counter()
+    timings: dict[str, float] = {}
     fuente_cruce_normalizada = _normalize_fuente_cruce(fuente_cruce)
     source_scoped_run = fuente_cruce_normalizada != FUENTE_FULL
     evidence_scoped_run = id_archivo_evidencia is not None
-    cedulas_evidencia = (
-        _fetch_arl_cedulas_by_archivo(id_archivo_evidencia)
-        if id_archivo_evidencia is not None
-        and fuente_cruce_normalizada == FUENTE_ARL
-        else []
+    cedulas_evidencia = timed_step(
+        timings,
+        "fetch_cedulas_evidencia_arl",
+        lambda: (
+            _fetch_arl_cedulas_by_archivo(id_archivo_evidencia)
+            if id_archivo_evidencia is not None
+            and fuente_cruce_normalizada == FUENTE_ARL
+            else []
+        ),
     )
     chunked_run = batch_size is not None or after_id_notificacion_esperada is not None
     scoped_run = (
@@ -1985,14 +1993,18 @@ def recalcular_cruce_notificaciones(
         or source_scoped_run
         or evidence_scoped_run
     )
-    fetched_expected_rows = _fetch_expected_rows(
-        id_archivo_salas,
-        batch_size=batch_size,
-        after_id_notificacion_esperada=after_id_notificacion_esperada,
-        solo_pendientes_filter=scoped_run and solo_pendientes,
-        fecha_referencia_desde=fecha_referencia_desde,
-        fecha_referencia_hasta=fecha_referencia_hasta,
-        cedulas_normalizadas=cedulas_evidencia,
+    fetched_expected_rows = timed_step(
+        timings,
+        "fetch_notificaciones_esperadas",
+        lambda: _fetch_expected_rows(
+            id_archivo_salas,
+            batch_size=batch_size,
+            after_id_notificacion_esperada=after_id_notificacion_esperada,
+            solo_pendientes_filter=scoped_run and solo_pendientes,
+            fecha_referencia_desde=fecha_referencia_desde,
+            fecha_referencia_hasta=fecha_referencia_hasta,
+            cedulas_normalizadas=cedulas_evidencia,
+        ),
     )
     fetched_last_id = max(
         (
@@ -2003,15 +2015,29 @@ def recalcular_cruce_notificaciones(
         default=None,
     )
     all_expected_rows = fetched_expected_rows
-    _enrich_expected_arl_fields(all_expected_rows)
-    latest_calificacion_audiencia_date = _fetch_latest_calificacion_sistema_audiencia_date()
+    timed_step(
+        timings,
+        "enrich_notificaciones_arl",
+        lambda: _enrich_expected_arl_fields(all_expected_rows),
+    )
+    latest_calificacion_audiencia_date = timed_step(
+        timings,
+        "fetch_fecha_maxima_calificacion_sistema",
+        _fetch_latest_calificacion_sistema_audiencia_date,
+    )
     aplica_filtro_raw_fecha_maxima = id_archivo_salas is None
     raw_skipped_by_date = 0
     if aplica_filtro_raw_fecha_maxima:
-        all_expected_rows, raw_skipped_by_date = _filter_raw_by_latest_audiencia_date(
-            all_expected_rows,
-            latest_calificacion_audiencia_date,
+        all_expected_rows, raw_skipped_by_date = timed_step(
+            timings,
+            "filter_raw_fecha_audiencia",
+            lambda: _filter_raw_by_latest_audiencia_date(
+                all_expected_rows,
+                latest_calificacion_audiencia_date,
+            ),
         )
+    else:
+        timings["filter_raw_fecha_audiencia"] = 0.0
     expected_rows = all_expected_rows
     if solo_pendientes:
         expected_rows = [
@@ -2020,23 +2046,53 @@ def recalcular_cruce_notificaciones(
             if row.get("estado_revision_notificacion") != ESTADO_CUMPLE
         ]
 
+    ventanas_start = perf_counter()
     date_window = _correo_date_window(expected_rows)
     guia_date_window = _guia_date_window(expected_rows)
     arl_date_window = _guia_date_window(expected_rows)
+    timings["calcular_ventanas_fecha"] = round(perf_counter() - ventanas_start, 4)
     load_correo = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_CORREO}
     load_guia = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_GUIA}
     load_arl = fuente_cruce_normalizada in {FUENTE_FULL, FUENTE_ARL}
-    correo_rows = _fetch_correo_rows(date_window) if load_correo else []
-    correo_index = _build_correo_index(correo_rows) if load_correo else {}
-    guia_rows = _fetch_guia_rows(guia_date_window) if load_guia else []
-    guia_index = _build_guia_index(guia_rows) if load_guia else {}
-    guia_document_index = _build_guia_document_index(guia_rows) if load_guia else {}
-    arl_rows = (
-        _fetch_arl_radicado_rows(arl_date_window, id_archivo_evidencia)
-        if load_arl
-        else []
+    correo_rows = timed_step(
+        timings,
+        "fetch_correos_certificados",
+        lambda: _fetch_correo_rows(date_window) if load_correo else [],
     )
-    arl_document_index = _build_arl_document_index(arl_rows) if load_arl else {}
+    correo_index = timed_step(
+        timings,
+        "indexar_correos_certificados",
+        lambda: _build_correo_index(correo_rows) if load_correo else {},
+    )
+    guia_rows = timed_step(
+        timings,
+        "fetch_guias_fisicas",
+        lambda: _fetch_guia_rows(guia_date_window) if load_guia else [],
+    )
+    guia_index = timed_step(
+        timings,
+        "indexar_guias_entregadas",
+        lambda: _build_guia_index(guia_rows) if load_guia else {},
+    )
+    guia_document_index = timed_step(
+        timings,
+        "indexar_guias_documento",
+        lambda: _build_guia_document_index(guia_rows) if load_guia else {},
+    )
+    arl_rows = timed_step(
+        timings,
+        "fetch_arls_radicado",
+        lambda: (
+            _fetch_arl_radicado_rows(arl_date_window, id_archivo_evidencia)
+            if load_arl
+            else []
+        ),
+    )
+    arl_document_index = timed_step(
+        timings,
+        "indexar_arls_radicado",
+        lambda: _build_arl_document_index(arl_rows) if load_arl else {},
+    )
 
     updates = []
     cruce_rows = []
@@ -2111,10 +2167,12 @@ def recalcular_cruce_notificaciones(
         "porcentaje_radicados_validados_extemporaneos": 0.0,
         "cruce_notificacion_pendiente": {},
         "resumen_validacion_radicado": {},
+        "timings": timings,
     }
     if batch_size is not None and summary["notificaciones_leidas"] >= batch_size:
         summary["next_cursor"] = summary["ultimo_id_leido"]
 
+    evaluar_start = perf_counter()
     for expected_row in expected_rows:
         candidate = None
         has_document_candidates = False
@@ -2183,6 +2241,7 @@ def recalcular_cruce_notificaciones(
             summary["pendientes"] += 1
         if status == ESTADO_NO_CRUZADO:
             summary["sin_correo_certificado"] += 1
+    timings["evaluar_notificaciones"] = round(perf_counter() - evaluar_start, 4)
 
     if summary["notificaciones_evaluadas"]:
         summary["porcentaje_notificaciones_validadas"] = round(
@@ -2190,6 +2249,7 @@ def recalcular_cruce_notificaciones(
             2,
         )
 
+    resumen_radicados_start = perf_counter()
     radicado_statuses = _radicado_field_statuses(all_expected_rows, status_by_expected_id)
     summary["radicados_evaluados"] = len(radicado_statuses)
     radicados_validados = set()
@@ -2221,7 +2281,12 @@ def recalcular_cruce_notificaciones(
             * 100,
             2,
         )
+    timings["calcular_resumen_radicados"] = round(
+        perf_counter() - resumen_radicados_start,
+        4,
+    )
 
+    delete_cruces_start = perf_counter()
     if cruce_rows:
         if scoped_run:
             summary["cruces_eliminados"] = db.delete_by_column_values(
@@ -2245,29 +2310,55 @@ def recalcular_cruce_notificaciones(
                 [row.get("id_notificacion_esperada") for row in cruce_rows],
             )
 
-        summary["cruces_insertados"] = db.insert_many(
-            "jnc.resultado_cruce_notificacion",
-            cruce_rows,
-        )
     elif not chunked_run and not solo_pendientes and id_archivo_salas is not None:
         summary["cruces_eliminados"] = db.delete_by_archivo(
             "jnc.resultado_cruce_notificacion",
             id_archivo_salas,
         )
-
-    summary["notificaciones_actualizadas"] = db.execute_many_updates(
-        "jnc.notificacion_esperada",
-        "id_notificacion_esperada",
-        updates,
+    timings["delete_cruces_anteriores"] = round(
+        perf_counter() - delete_cruces_start,
+        4,
     )
-    summary["cruce_notificacion_pendiente"] = _refresh_cruce_notificacion_pendiente(
-        id_archivo=id_archivo_salas,
-        id_notificacion_esperada_values=[
-            row.get("id_notificacion_esperada") for row in cruce_rows
-        ]
-        if scoped_run or solo_pendientes
-        else None,
+    if cruce_rows:
+        summary["cruces_insertados"] = timed_step(
+            timings,
+            "insert_cruces_notificacion",
+            lambda: db.insert_many(
+                "jnc.resultado_cruce_notificacion",
+                cruce_rows,
+            ),
+        )
+    else:
+        timings["insert_cruces_notificacion"] = 0.0
+
+    summary["notificaciones_actualizadas"] = timed_step(
+        timings,
+        "update_notificaciones_esperadas",
+        lambda: db.execute_many_updates(
+            "jnc.notificacion_esperada",
+            "id_notificacion_esperada",
+            updates,
+        ),
+    )
+    summary["cruce_notificacion_pendiente"] = timed_step(
+        timings,
+        "refresh_cruce_notificacion_pendiente",
+        lambda: _refresh_cruce_notificacion_pendiente(
+            id_archivo=id_archivo_salas,
+            id_notificacion_esperada_values=[
+                row.get("id_notificacion_esperada") for row in cruce_rows
+            ]
+            if scoped_run or solo_pendientes
+            else None,
+        ),
     )
     if refrescar_resumen:
-        summary["resumen_validacion_radicado"] = refrescar_resumen_validacion_radicado()
+        summary["resumen_validacion_radicado"] = timed_step(
+            timings,
+            "refresh_resumen_validacion_radicado",
+            refrescar_resumen_validacion_radicado,
+        )
+    else:
+        timings["refresh_resumen_validacion_radicado"] = 0.0
+    timings["total_recalculo"] = round(perf_counter() - total_start, 4)
     return summary
