@@ -601,7 +601,6 @@ CREATE TABLE jnc.resumen_validacion_radicado (
     fecha_audiencia DATE NULL,
     cedula NVARCHAR(50) NULL,
     nombre_paciente NVARCHAR(500) NULL,
-    cruces_json NVARCHAR(MAX) NULL,
     condicion_pacientes BIT NOT NULL,
     condicion_pacientes_extemporaneo BIT NOT NULL,
     condicion_regional BIT NOT NULL,

@@ -236,55 +236,6 @@ def _delete_raw_rows_for_consolidated_radicados(radicados: list[str]) -> dict[st
     }
 
 
-def _delete_superseded_rows_for_consolidated_radicados(
-    id_archivo: int,
-    radicados: list[str],
-) -> dict[str, int]:
-    clean_radicados = sorted({radicado for radicado in radicados if radicado})
-    if not clean_radicados:
-        return {
-            "notificaciones_reemplazadas": 0,
-            "casos_reemplazados": 0,
-            "cruces_reemplazados": 0,
-            "pendientes_reemplazados": 0,
-        }
-
-    deleted_notifications = 0
-    deleted_cases = 0
-    deleted_crosses = 0
-    deleted_pending = 0
-    for chunk in _chunks(clean_radicados):
-        placeholders = ", ".join("?" for _ in chunk)
-        params = [id_archivo, *chunk]
-        where = (
-            "(id_archivo IS NULL OR id_archivo <> ?) "
-            f"AND numero_radicado_normalizado IN ({placeholders})"
-        )
-        deleted_pending += db.execute_sql(
-            f"DELETE FROM jnc.cruce_notificacion_pendiente WHERE {where}",
-            params,
-        )
-        deleted_crosses += db.execute_sql(
-            f"DELETE FROM jnc.resultado_cruce_notificacion WHERE {where}",
-            params,
-        )
-        deleted_notifications += db.execute_sql(
-            f"DELETE FROM jnc.notificacion_esperada WHERE {where}",
-            params,
-        )
-        deleted_cases += db.execute_sql(
-            f"DELETE FROM jnc.caso_calificado WHERE {where}",
-            params,
-        )
-
-    return {
-        "notificaciones_reemplazadas": deleted_notifications,
-        "casos_reemplazados": deleted_cases,
-        "cruces_reemplazados": deleted_crosses,
-        "pendientes_reemplazados": deleted_pending,
-    }
-
-
 def _backfill_sala_from_calificacion_sistema_caso() -> dict[str, int]:
     notificaciones_actualizadas = db.execute_sql(
         """
@@ -371,6 +322,7 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
         "cruce_notificaciones": {},
         "prioridad_consolidado": {},
         "vigencia_consolidado": {},
+        "coexistencia_versiones": True,
         "duplicado_consolidado_omitido": False,
         "backfill_sala": {},
         "timings": {},
@@ -523,15 +475,6 @@ def write_salas_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[s
                     "insert_caso_calificado",
                     lambda: db.insert_many("jnc.caso_calificado", caso_rows),
                 )
-                if result.get("modo_procesamiento") != RAW_ORIGIN:
-                    summary["vigencia_consolidado"] = timed_step(
-                        timings,
-                        "delete_superseded_rows_consolidado",
-                        lambda: _delete_superseded_rows_for_consolidated_radicados(
-                            id_archivo,
-                            consolidated_radicados,
-                        ),
-                    )
 
                 caso_id_by_radicado = timed_step(
                     timings,

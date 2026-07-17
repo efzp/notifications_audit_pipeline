@@ -17,7 +17,6 @@ SELECT
     fecha_audiencia,
     cedula,
     nombre_paciente,
-    cruces_json,
     condicion_pacientes,
     condicion_pacientes_extemporaneo,
     condicion_regional,

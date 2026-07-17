@@ -21,7 +21,6 @@ BEGIN
         fecha_audiencia DATE NULL,
         cedula NVARCHAR(50) NULL,
         nombre_paciente NVARCHAR(500) NULL,
-        cruces_json NVARCHAR(MAX) NULL,
         condicion_pacientes BIT NOT NULL,
         condicion_pacientes_extemporaneo BIT NOT NULL,
         condicion_regional BIT NOT NULL,
@@ -44,12 +43,6 @@ BEGIN
         fecha_actualizacion_resumen DATETIME2(0) NOT NULL
             CONSTRAINT DF_resumen_validacion_fecha_actualizacion DEFAULT (SYSUTCDATETIME())
     );
-END;
-
-IF COL_LENGTH('jnc.resumen_validacion_radicado', 'cruces_json') IS NULL
-BEGIN
-    ALTER TABLE jnc.resumen_validacion_radicado
-        ADD cruces_json NVARCHAR(MAX) NULL;
 END;
 
 IF COL_LENGTH('jnc.resumen_validacion_radicado', 'sala') IS NULL
@@ -120,15 +113,9 @@ BEGIN
     WITH caso_base AS (
         SELECT
             cc.*,
-            COALESCE(
-                NULLIF(cc.hoja_trabajo_sala, ''),
-                NULLIF(cc.hoja_trabajo_sala_normalizada, ''),
-                NULLIF(cc.pestana_sala_normalizada, '')
-            ) AS sala_caso_calificado,
             csc_resumen.sala AS sala_calificacion_sistema_caso,
             CASE WHEN ac_resumen.id_audiencia_caso IS NULL THEN 0 ELSE 1 END
                 AS tiene_acta_audiencia,
-            ac_resumen.sala AS sala_audiencia_caso,
             ac_resumen.fecha_audiencia AS fecha_audiencia_resumen,
             ac_resumen.nombre_paciente AS nombre_paciente_audiencia_caso
         FROM jnc.caso_calificado AS cc
@@ -138,23 +125,14 @@ BEGIN
             FROM jnc.calificacion_sistema_caso AS csc
             WHERE csc.activo = 1
               AND csc.numero_radicado_normalizado = cc.numero_radicado_normalizado
-              AND (
-                    csc.cedula_normalizada = cc.cedula_normalizada
-                    OR csc.cedula_normalizada IS NULL
-                    OR cc.cedula_normalizada IS NULL
-              )
+              AND csc.cedula_normalizada = cc.cedula_normalizada
             ORDER BY
-                CASE
-                    WHEN csc.cedula_normalizada = cc.cedula_normalizada THEN 0
-                    ELSE 1
-                END,
                 csc.fecha_audiencia DESC,
                 csc.id_calificacion_sistema_caso DESC
         ) AS csc_resumen
         OUTER APPLY (
             SELECT TOP (1)
                 ac.id_audiencia_caso,
-                ac.sala_normalizada AS sala,
                 ac.fecha_audiencia,
                 ac.nombre_paciente_normalizado AS nombre_paciente
             FROM jnc.audiencia_caso AS ac
@@ -191,8 +169,6 @@ BEGIN
             cc.numero_radicado_normalizado,
             cc.pestana_nombre AS nombre_pestana,
             NULLIF(cc.sala_calificacion_sistema_caso, '') AS sala,
-            cc.sala_audiencia_caso AS sala_acta,
-            cc.sala_caso_calificado,
             CAST(MAX(cc.tiene_acta_audiencia) AS BIT) AS tiene_acta_audiencia,
             cc.fecha_audiencia_resumen AS fecha_audiencia,
             MAX(ne.cedula) AS cedula,
@@ -243,8 +219,6 @@ BEGIN
             cc.numero_radicado_normalizado,
             cc.pestana_nombre,
             cc.sala_calificacion_sistema_caso,
-            cc.sala_audiencia_caso,
-            cc.sala_caso_calificado,
             cc.fecha_audiencia_resumen,
             cc.nombre_paciente_audiencia_caso
     ),
@@ -254,8 +228,6 @@ BEGIN
             numero_radicado_normalizado,
             MAX(nombre_pestana) AS nombre_pestana,
             MAX(sala) AS sala,
-            MAX(sala_acta) AS sala_acta,
-            MAX(sala_caso_calificado) AS sala_caso_calificado,
             CAST(MAX(CAST(tiene_acta_audiencia AS INT)) AS BIT) AS tiene_acta_audiencia,
             MAX(fecha_audiencia) AS fecha_audiencia,
             MAX(cedula) AS cedula,
@@ -279,76 +251,16 @@ BEGIN
         FROM resumen_por_caso
         GROUP BY
             numero_radicado_normalizado
-    ),
-    cruces_por_radicado AS (
-        SELECT
-            rcn_base.numero_radicado_normalizado,
-            (
-                SELECT
-                    rcn.id_resultado_cruce,
-                    rcn.id_notificacion_esperada,
-                    rcn.id_caso,
-                    rcn.id_calificacion_sistema_caso,
-                    rcn.id_archivo,
-                    rcn.numero_radicado,
-                    rcn.numero_radicado_normalizado,
-                    rcn.cedula,
-                    rcn.cedula_normalizada,
-                    rcn.tipo_destinatario,
-                    rcn.id_notificacion_correo_certificado_match,
-                    rcn.id_archivo_correo_certificado_match,
-                    rcn.numero_linea_csv_match,
-                    rcn.estado_revision_notificacion,
-                    rcn.descripcion_revision,
-                    rcn.cumple_documento,
-                    rcn.cumple_asunto,
-                    rcn.cumple_evento,
-                    rcn.cumple_correo,
-                    rcn.cumple_plazo,
-                    rcn.score_total,
-                    rcn.score_asunto,
-                    rcn.score_evento,
-                    rcn.fuente_documento_match,
-                    rcn.asunto_tipo_match,
-                    rcn.evento_tipo_match,
-                    rcn.tipo_match_correo,
-                    rcn.distancia_correo,
-                    rcn.correo_esperado,
-                    rcn.correo_certificado,
-                    rcn.fecha_audiencia,
-                    rcn.fecha_envio_certificado,
-                    rcn.dias_despues_audiencia,
-                    rcn.fecha_revision,
-                    rcn.version_regla_cruce,
-                    JSON_QUERY(rcn.detalle_revision_json) AS detalle_revision_json
-                FROM jnc.resultado_cruce_notificacion AS rcn
-                WHERE rcn.activo = 1
-                  AND rcn.numero_radicado_normalizado = rcn_base.numero_radicado_normalizado
-                ORDER BY
-                    rcn.tipo_destinatario,
-                    rcn.id_resultado_cruce
-                FOR JSON PATH
-            ) AS cruces_json
-        FROM (
-            SELECT DISTINCT
-                numero_radicado_normalizado
-            FROM jnc.resultado_cruce_notificacion
-            WHERE activo = 1
-              AND numero_radicado_normalizado IS NOT NULL
-        ) AS rcn_base
     )
     INSERT INTO jnc.resumen_validacion_radicado (
         numero_radicado,
         numero_radicado_normalizado,
         nombre_pestana,
         sala,
-        sala_acta,
-        sala_caso_calificado,
         tiene_acta_audiencia,
         fecha_audiencia,
         cedula,
         nombre_paciente,
-        cruces_json,
         condicion_pacientes,
         condicion_pacientes_extemporaneo,
         condicion_regional,
@@ -375,13 +287,10 @@ BEGIN
         rpr.numero_radicado_normalizado,
         rpr.nombre_pestana,
         rpr.sala,
-        rpr.sala_acta,
-        rpr.sala_caso_calificado,
         rpr.tiene_acta_audiencia,
         rpr.fecha_audiencia,
         rpr.cedula,
         rpr.nombre_paciente,
-        COALESCE(cg.cruces_json, N'[]') AS cruces_json,
         rpr.condicion_pacientes,
         rpr.condicion_pacientes_extemporaneo,
         rpr.condicion_regional,
@@ -460,9 +369,7 @@ BEGIN
             ''
         ) AS no_cumplimiento_revision_manual,
         SYSUTCDATETIME() AS fecha_actualizacion_resumen
-    FROM resumen_por_radicado AS rpr
-    LEFT JOIN cruces_por_radicado AS cg
-        ON cg.numero_radicado_normalizado = rpr.numero_radicado_normalizado;
+    FROM resumen_por_radicado AS rpr;
 
     COMMIT TRANSACTION;
 END;
