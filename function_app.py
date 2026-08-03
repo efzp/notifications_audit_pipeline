@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 import azure.functions as func
@@ -26,6 +27,7 @@ from src.load.write_revision_manual_notificaciones import (
 )
 from src.load.write_salas import write_salas_result_to_sql
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
+from src.reconcile.resumen_validacion import refrescar_resumen_validacion_radicado
 from src.reconcile.revision_manual_notificaciones import aplicar_revision_manual_notificaciones
 
 
@@ -353,6 +355,37 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
 
     try:
         payload = get_optional_request_payload(req)
+        solo_refrescar_resumen = parse_bool(
+            payload,
+            "solo_refrescar_resumen",
+            False,
+        )
+        if solo_refrescar_resumen:
+            started_at = perf_counter()
+            resumen = db.run_in_transaction(
+                refrescar_resumen_validacion_radicado,
+            )
+            duracion_segundos = round(perf_counter() - started_at, 4)
+            logging.info(
+                "refrescar_resumen_validacion_radicado completado en %.4f segundos",
+                duracion_segundos,
+            )
+            return build_json_response(
+                {
+                    "status": "OK",
+                    "modo": "SOLO_REFRESCAR_RESUMEN",
+                    "solo_refrescar_resumen": True,
+                    "cruce_notificaciones": {
+                        "resumen_validacion_radicado": resumen,
+                        "timings_segundos": {
+                            "refresh_resumen_validacion_radicado": duracion_segundos,
+                            "total_recalculo": duracion_segundos,
+                        },
+                    },
+                },
+                status_code=200,
+            )
+
         id_archivo_salas = parse_optional_int(payload, "id_archivo_salas")
         id_archivo_evidencia = parse_optional_int(payload, "id_archivo_evidencia")
         solo_pendientes = parse_bool(payload, "solo_pendientes", False)
