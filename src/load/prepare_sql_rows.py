@@ -939,16 +939,12 @@ def prepare_correo_certificado_rows(
         mapped_row["destinatario_nombre_normalizado"] = normalize_db_string(
             source_row.get("nombres")
         )
-        mapped_row["nombres"] = source_row.get("nombres")
-        mapped_row["correo"] = source_row.get("correo")
-        mapped_row["asunto_normalizado"] = normalize_db_string(source_row.get("asunto"))
-        mapped_row["fila_correo_certificado_json"] = json_dumps_safe(source_row)
         mapped_row["fecha_creacion"] = utc_now_iso()
 
         hash_payload = {
             key: value
             for key, value in mapped_row.items()
-            if key not in {"fila_correo_certificado_json", "hash_correo"}
+            if key != "hash_correo"
         }
         mapped_row["hash_correo"] = sha256_dict(hash_payload)
         rows.append(mapped_row)

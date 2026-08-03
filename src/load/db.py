@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from contextvars import ContextVar
@@ -471,9 +472,12 @@ def insert_many(
     table_name: str,
     rows: list[dict[str, Any]],
     fast_executemany: bool | None = None,
+    batch_size: int | None = None,
 ) -> int:
     if not rows:
         return 0
+    if batch_size is not None and batch_size <= 0:
+        raise ValueError("batch_size debe ser mayor que cero")
 
     quoted_table = quote_table_name(table_name)
     table_columns = get_table_columns(table_name)
@@ -492,8 +496,9 @@ def insert_many(
     quoted_columns = ", ".join(quote_column_name(column_name) for column_name in columns)
     placeholders = ", ".join("?" for _ in columns)
     sql = f"INSERT INTO {quoted_table} ({quoted_columns}) VALUES ({placeholders})"
-    coerced_rows = [coerce_values_to_table_types(table_name, row) for row in rows]
-    params = [tuple(row.get(column_name) for column_name in columns) for row in coerced_rows]
+    column_types = get_table_column_types(table_name)
+    effective_batch_size = batch_size or len(rows)
+    total_batches = (len(rows) + effective_batch_size - 1) // effective_batch_size
 
     def operation(connection):
         cursor = connection.cursor()
@@ -505,8 +510,33 @@ def insert_many(
             }
         else:
             cursor.fast_executemany = fast_executemany
-        cursor.executemany(sql, params)
-        return len(rows)
+
+        inserted = 0
+        for batch_number, start in enumerate(
+            range(0, len(rows), effective_batch_size),
+            start=1,
+        ):
+            row_batch = rows[start : start + effective_batch_size]
+            params = [
+                tuple(
+                    _coerce_value_for_sql(column_types.get(column_name), row.get(column_name))
+                    for column_name in columns
+                )
+                for row in row_batch
+            ]
+            cursor.executemany(sql, params)
+            inserted += len(params)
+
+            if batch_size is not None:
+                logging.info(
+                    "insert_many %s lote %s/%s completado (%s filas)",
+                    table_name,
+                    batch_number,
+                    total_batches,
+                    len(params),
+                )
+
+        return inserted
 
     return _execute_with_optional_own_connection(operation)
 

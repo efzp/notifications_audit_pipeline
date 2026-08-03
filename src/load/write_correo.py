@@ -13,6 +13,9 @@ from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 from src.utils.normalization import normalize_date
 
 
+CORREO_INSERT_BATCH_SIZE = 5000
+
+
 def _as_date(value: Any) -> date | None:
     normalized = normalize_date(value)
     if normalized is None:
@@ -106,7 +109,12 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
         summary["correos_insertados"] = timed_step(
             timings,
             "insert_notificacion_correo_certificado",
-            lambda: db.insert_many("jnc.notificacion_correo_certificado", correo_rows),
+            lambda: db.insert_many(
+                "jnc.notificacion_correo_certificado",
+                correo_rows,
+                fast_executemany=True,
+                batch_size=CORREO_INSERT_BATCH_SIZE,
+            ),
         )
         summary["errores_insertados"] = timed_step(
             timings,
