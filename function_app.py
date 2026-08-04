@@ -103,6 +103,45 @@ def parse_optional_positive_int(payload: dict[str, Any], field_name: str) -> int
     return value
 
 
+def parse_optional_positive_int_list(
+    payload: dict[str, Any],
+    field_name: str,
+    max_items: int = 100,
+) -> list[int] | None:
+    raw_value = payload.get(field_name)
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} debe ser una lista de numeros")
+    if not raw_value:
+        raise ValueError(f"{field_name} no puede estar vacia")
+    if len(raw_value) > max_items:
+        raise ValueError(f"{field_name} admite maximo {max_items} elementos")
+
+    values: list[int] = []
+    seen: set[int] = set()
+    for index, raw_item in enumerate(raw_value):
+        if isinstance(raw_item, bool):
+            raise ValueError(
+                f"{field_name}[{index}] debe ser un numero entero positivo"
+            )
+        try:
+            item = int(raw_item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{field_name}[{index}] debe ser un numero entero positivo"
+            ) from exc
+        if item <= 0:
+            raise ValueError(
+                f"{field_name}[{index}] debe ser un numero entero positivo"
+            )
+        if item not in seen:
+            values.append(item)
+            seen.add(item)
+
+    return values
+
+
 def parse_bool(payload: dict[str, Any], field_name: str, default: bool) -> bool:
     raw_value = payload.get(field_name, default)
     if isinstance(raw_value, bool):
@@ -387,6 +426,16 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
             )
 
         id_archivo_salas = parse_optional_int(payload, "id_archivo_salas")
+        id_archivos_salas = parse_optional_positive_int_list(
+            payload,
+            "id_archivos_salas",
+        )
+        if id_archivo_salas is not None and id_archivo_salas <= 0:
+            raise ValueError("id_archivo_salas debe ser mayor que cero")
+        if id_archivo_salas is not None and id_archivos_salas is not None:
+            raise ValueError(
+                "Use id_archivo_salas o id_archivos_salas, pero no ambos"
+            )
         id_archivo_evidencia = parse_optional_int(payload, "id_archivo_evidencia")
         solo_pendientes = parse_bool(payload, "solo_pendientes", False)
         batch_size = parse_optional_positive_int(payload, "batch_size")
@@ -402,7 +451,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
         refrescar_resumen = parse_bool(
             payload,
             "refrescar_resumen",
-            batch_size is None,
+            batch_size is None and id_archivos_salas is None,
         )
         fuente_cruce = (
             parse_optional_text(payload, "fuente_cruce")
@@ -418,12 +467,14 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 after_id_notificacion_esperada=after_id_notificacion_esperada,
                 refrescar_resumen=refrescar_resumen,
                 fuente_cruce=fuente_cruce,
+                id_archivos_salas=id_archivos_salas,
             )
         )
         return build_json_response(
             {
                 "status": "OK",
                 "id_archivo_salas": id_archivo_salas,
+                "id_archivos_salas": id_archivos_salas,
                 "id_archivo_evidencia": id_archivo_evidencia,
                 "solo_pendientes": solo_pendientes,
                 "batch_size": batch_size,

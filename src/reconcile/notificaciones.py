@@ -61,6 +61,45 @@ STATUS_RANK = {
 }
 
 
+def _normalize_id_archivos_salas(
+    id_archivo_salas: int | None,
+    id_archivos_salas: list[int] | None,
+) -> list[int]:
+    if id_archivo_salas is not None and id_archivos_salas is not None:
+        raise ValueError(
+            "Use id_archivo_salas o id_archivos_salas, pero no ambos"
+        )
+
+    raw_values: list[Any]
+    if id_archivos_salas is not None:
+        if not id_archivos_salas:
+            raise ValueError("id_archivos_salas no puede estar vacia")
+        raw_values = list(id_archivos_salas)
+    elif id_archivo_salas is not None:
+        raw_values = [id_archivo_salas]
+    else:
+        return []
+
+    values: list[int] = []
+    seen: set[int] = set()
+    for raw_value in raw_values:
+        if isinstance(raw_value, bool):
+            raise ValueError("Los id_archivos_salas deben ser enteros positivos")
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Los id_archivos_salas deben ser enteros positivos"
+            ) from exc
+        if value <= 0:
+            raise ValueError("Los id_archivos_salas deben ser enteros positivos")
+        if value not in seen:
+            values.append(value)
+            seen.add(value)
+
+    return values
+
+
 def _normalize_fuente_cruce(value: Any) -> str:
     if value in (None, ""):
         return FUENTE_FULL
@@ -314,6 +353,7 @@ def _fetch_expected_rows(
     fecha_referencia_desde: date | None = None,
     fecha_referencia_hasta: date | None = None,
     cedulas_normalizadas: list[str] | None = None,
+    id_archivos_salas: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     base_columns = [
         "id_notificacion_esperada",
@@ -347,7 +387,15 @@ def _fetch_expected_rows(
 
     where = "[activo] = 1"
     params: list[Any] = []
-    if id_archivo_salas is not None:
+    if id_archivo_salas is not None and id_archivos_salas is not None:
+        raise ValueError(
+            "Use id_archivo_salas o id_archivos_salas, pero no ambos"
+        )
+    if id_archivos_salas:
+        placeholders = ", ".join("?" for _ in id_archivos_salas)
+        where += f" AND [id_archivo] IN ({placeholders})"
+        params.extend(id_archivos_salas)
+    elif id_archivo_salas is not None:
         where += " AND [id_archivo] = ?"
         params.append(id_archivo_salas)
     if after_id_notificacion_esperada is not None:
@@ -1853,6 +1901,7 @@ def _refresh_cruce_notificacion_pendiente(
     id_archivo: int | None = None,
     id_notificacion_esperada_values: list[Any] | None = None,
 ) -> dict[str, int]:
+    ids_scope_provided = id_notificacion_esperada_values is not None
     ids = [
         value
         for value in (id_notificacion_esperada_values or [])
@@ -1940,6 +1989,11 @@ def _refresh_cruce_notificacion_pendiente(
                 ),
                 chunk,
             )
+    elif ids_scope_provided:
+        return {
+            "pendientes_eliminados": 0,
+            "pendientes_insertados": 0,
+        }
     elif id_archivo is not None:
         total_deleted = db.execute_sql(
             "DELETE FROM jnc.cruce_notificacion_pendiente WHERE id_archivo = ?",
@@ -1969,9 +2023,15 @@ def recalcular_cruce_notificaciones(
     fecha_referencia_hasta: date | None = None,
     refrescar_resumen: bool = True,
     fuente_cruce: str | None = None,
+    id_archivos_salas: list[int] | None = None,
 ) -> dict[str, Any]:
     total_start = perf_counter()
     timings: dict[str, float] = {}
+    archivos_salas = _normalize_id_archivos_salas(
+        id_archivo_salas,
+        id_archivos_salas,
+    )
+    archivo_salas_unico = archivos_salas[0] if len(archivos_salas) == 1 else None
     fuente_cruce_normalizada = _normalize_fuente_cruce(fuente_cruce)
     source_scoped_run = fuente_cruce_normalizada != FUENTE_FULL
     evidence_scoped_run = id_archivo_evidencia is not None
@@ -1997,13 +2057,14 @@ def recalcular_cruce_notificaciones(
         timings,
         "fetch_notificaciones_esperadas",
         lambda: _fetch_expected_rows(
-            id_archivo_salas,
+            None,
             batch_size=batch_size,
             after_id_notificacion_esperada=after_id_notificacion_esperada,
             solo_pendientes_filter=scoped_run and solo_pendientes,
             fecha_referencia_desde=fecha_referencia_desde,
             fecha_referencia_hasta=fecha_referencia_hasta,
             cedulas_normalizadas=cedulas_evidencia,
+            id_archivos_salas=archivos_salas or None,
         ),
     )
     fetched_last_id = max(
@@ -2025,7 +2086,7 @@ def recalcular_cruce_notificaciones(
         "fetch_fecha_maxima_calificacion_sistema",
         _fetch_latest_calificacion_sistema_audiencia_date,
     )
-    aplica_filtro_raw_fecha_maxima = id_archivo_salas is None
+    aplica_filtro_raw_fecha_maxima = not archivos_salas
     raw_skipped_by_date = 0
     if aplica_filtro_raw_fecha_maxima:
         all_expected_rows, raw_skipped_by_date = timed_step(
@@ -2108,6 +2169,8 @@ def recalcular_cruce_notificaciones(
         "batch_size": batch_size,
         "after_id_notificacion_esperada": after_id_notificacion_esperada,
         "id_archivo_evidencia": id_archivo_evidencia,
+        "id_archivo_salas": archivo_salas_unico,
+        "id_archivos_salas": archivos_salas or None,
         "cedulas_evidencia": cedulas_evidencia,
         "fecha_referencia_desde": fecha_referencia_desde.isoformat()
         if fecha_referencia_desde
@@ -2294,11 +2357,21 @@ def recalcular_cruce_notificaciones(
                 "id_notificacion_esperada",
                 [row.get("id_notificacion_esperada") for row in cruce_rows],
             )
-        elif not solo_pendientes and id_archivo_salas is not None:
-            summary["cruces_eliminados"] = db.delete_by_archivo(
-                "jnc.resultado_cruce_notificacion",
-                id_archivo_salas,
-            )
+        elif not solo_pendientes and archivos_salas:
+            if archivo_salas_unico is not None:
+                summary["cruces_eliminados"] = db.delete_by_archivo(
+                    "jnc.resultado_cruce_notificacion",
+                    archivo_salas_unico,
+                )
+            else:
+                summary["cruces_eliminados"] = db.delete_by_column_values(
+                    "jnc.resultado_cruce_notificacion",
+                    "id_notificacion_esperada",
+                    [
+                        row.get("id_notificacion_esperada")
+                        for row in all_expected_rows
+                    ],
+                )
         elif not solo_pendientes:
             summary["cruces_eliminados"] = db.delete_all(
                 "jnc.resultado_cruce_notificacion",
@@ -2310,11 +2383,21 @@ def recalcular_cruce_notificaciones(
                 [row.get("id_notificacion_esperada") for row in cruce_rows],
             )
 
-    elif not chunked_run and not solo_pendientes and id_archivo_salas is not None:
-        summary["cruces_eliminados"] = db.delete_by_archivo(
-            "jnc.resultado_cruce_notificacion",
-            id_archivo_salas,
-        )
+    elif not chunked_run and not solo_pendientes and archivos_salas:
+        if archivo_salas_unico is not None:
+            summary["cruces_eliminados"] = db.delete_by_archivo(
+                "jnc.resultado_cruce_notificacion",
+                archivo_salas_unico,
+            )
+        else:
+            summary["cruces_eliminados"] = db.delete_by_column_values(
+                "jnc.resultado_cruce_notificacion",
+                "id_notificacion_esperada",
+                [
+                    row.get("id_notificacion_esperada")
+                    for row in all_expected_rows
+                ],
+            )
     timings["delete_cruces_anteriores"] = round(
         perf_counter() - delete_cruces_start,
         4,
@@ -2344,11 +2427,11 @@ def recalcular_cruce_notificaciones(
         timings,
         "refresh_cruce_notificacion_pendiente",
         lambda: _refresh_cruce_notificacion_pendiente(
-            id_archivo=id_archivo_salas,
+            id_archivo=archivo_salas_unico,
             id_notificacion_esperada_values=[
                 row.get("id_notificacion_esperada") for row in cruce_rows
             ]
-            if scoped_run or solo_pendientes
+            if scoped_run or solo_pendientes or len(archivos_salas) > 1
             else None,
         ),
     )
