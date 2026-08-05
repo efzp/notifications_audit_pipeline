@@ -223,6 +223,7 @@ CREATE TABLE jnc.notificacion_correo_certificado (
     adjuntos NVARCHAR(MAX) NULL,
     numeros_asunto_json NVARCHAR(MAX) NULL,
     numeros_adjuntos_json NVARCHAR(MAX) NULL,
+    nombre_archivo NVARCHAR(500) NULL,
     fila_correo_certificado_json NVARCHAR(MAX) NULL,
     hash_correo NVARCHAR(64) NULL,
     fecha_creacion DATETIME2(0) NOT NULL

@@ -83,6 +83,7 @@ CORREO_CERTIFICADO_FIELD_MAP: dict[str, str] = {
     "adjuntos": "adjuntos",
     "numeros_asunto": "numeros_asunto_json",
     "numeros_adjuntos": "numeros_adjuntos_json",
+    "nombre_archivo": "nombre_archivo",
 }
 
 

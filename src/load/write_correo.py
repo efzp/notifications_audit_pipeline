@@ -123,6 +123,56 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
                 batch_size=CORREO_INSERT_BATCH_SIZE,
             ),
         )
+        if result.get("tipo_archivo") in {
+            "CORREO_CERTIFICADO_PDF",
+            "PDF_CORREO_CERTIFICADO",
+        }:
+            if len(correo_rows) != 1 or summary["correos_insertados"] != 1:
+                raise ValueError(
+                    "Cada PDF de correo certificado debe producir exactamente una fila"
+                )
+            table_columns = db.get_table_columns(
+                "jnc.notificacion_correo_certificado"
+            )
+            result_columns = [
+                column
+                for column in (
+                    "id_notificacion_correo",
+                    "estado_correo",
+                    "codigo_certificado",
+                    "nombre_archivo",
+                )
+                if column in table_columns
+            ]
+            inserted_rows = db.fetch_rows(
+                "jnc.notificacion_correo_certificado",
+                result_columns,
+                "[id_archivo] = ?",
+                [id_archivo],
+            )
+            if len(inserted_rows) != 1:
+                raise ValueError(
+                    "No fue posible identificar de forma unica la fila insertada por el PDF"
+                )
+            inserted_row = inserted_rows[0]
+            summary.update(
+                {
+                    "id_notificacion_correo": inserted_row.get(
+                        "id_notificacion_correo"
+                    ),
+                    "cedula_detectada": result.get("cedula_detectada"),
+                    "cedula_normalizada": result.get("cedula_normalizada"),
+                    "tipo_destinatario_detectado": result.get(
+                        "tipo_destinatario_detectado"
+                    ),
+                    "estado_correo": inserted_row.get("estado_correo"),
+                    "codigo_certificado": inserted_row.get(
+                        "codigo_certificado"
+                    ),
+                    "nombre_archivo": inserted_row.get("nombre_archivo")
+                    or result.get("nombre_archivo"),
+                }
+            )
         summary["errores_insertados"] = timed_step(
             timings,
             "insert_etl_error_procesamiento",
@@ -186,3 +236,13 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
         return summary
 
     return db.run_in_transaction(transaction)
+
+
+def write_correo_pdf_result_to_sql(
+    id_archivo: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Persiste un PDF sin ejecutar el cruce en la misma llamada."""
+    pdf_result = dict(result)
+    pdf_result["_recalcular_cruce"] = False
+    return write_correo_result_to_sql(id_archivo, pdf_result)

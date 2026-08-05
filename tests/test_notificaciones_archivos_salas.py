@@ -13,6 +13,7 @@ from src.reconcile.notificaciones import (
     _fetch_expected_rows,
     _normalize_id_archivos_salas,
     _refresh_cruce_notificacion_pendiente,
+    _validate_evento,
 )
 
 
@@ -68,6 +69,37 @@ class FetchExpectedRowsArchivosSalasTests(unittest.TestCase):
             where,
         )
         self.assertEqual(params, [5499, 5500, 5501, "CUMPLE"])
+
+    def test_filtra_exclusivamente_por_cedula_normalizada(self):
+        table_columns = {
+            "id_notificacion_esperada",
+            "cedula_normalizada",
+            "activo",
+        }
+
+        with (
+            patch.object(db, "get_table_columns", return_value=table_columns),
+            patch.object(db, "fetch_rows", return_value=[]) as fetch_rows,
+        ):
+            _fetch_expected_rows(
+                None,
+                cedulas_normalizadas=["52450952"],
+            )
+
+        _, _, where, params = fetch_rows.call_args.args
+        self.assertIn("[cedula_normalizada] IN (?)", where)
+        self.assertEqual(params, ["52450952"])
+
+
+class ValidateEventoTests(unittest.TestCase):
+    def test_traza_servidor_destino_es_evento_valido(self):
+        cumple, score, tipo = _validate_evento(
+            "Traza entrega al servidor de destino"
+        )
+
+        self.assertTrue(cumple)
+        self.assertEqual(score, 1.0)
+        self.assertEqual(tipo, "traza_entrega_servidor_destino")
 
 
 class RefreshPendientesScopeTests(unittest.TestCase):

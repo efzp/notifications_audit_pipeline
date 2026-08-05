@@ -194,6 +194,20 @@ def _validate_evento(evento: Any) -> tuple[bool, float, str | None]:
     if acuse_score >= FUZZY_THRESHOLD:
         return True, round(acuse_score, 4), "acuse"
 
+    traza_score = _best_token_score(tokens, "traza")
+    entrega_score = _best_token_score(tokens, "entrega")
+    servidor_score = _best_token_score(tokens, "servidor")
+    destino_score = _best_token_score(tokens, "destino")
+    traza_total = round(
+        (traza_score + entrega_score + servidor_score + destino_score) / 4,
+        4,
+    )
+    if all(
+        score >= FUZZY_THRESHOLD
+        for score in (traza_score, entrega_score, servidor_score, destino_score)
+    ):
+        return True, traza_total, "traza_entrega_servidor_destino"
+
     lectura_score = _best_token_score(tokens, "lectura")
     mensaje_score = _best_token_score(tokens, "mensaje")
     lectura_total = round((lectura_score + mensaje_score) / 2, 4)
@@ -2024,6 +2038,7 @@ def recalcular_cruce_notificaciones(
     refrescar_resumen: bool = True,
     fuente_cruce: str | None = None,
     id_archivos_salas: list[int] | None = None,
+    cedulas_objetivo: list[str] | None = None,
 ) -> dict[str, Any]:
     total_start = perf_counter()
     timings: dict[str, float] = {}
@@ -2035,6 +2050,14 @@ def recalcular_cruce_notificaciones(
     fuente_cruce_normalizada = _normalize_fuente_cruce(fuente_cruce)
     source_scoped_run = fuente_cruce_normalizada != FUENTE_FULL
     evidence_scoped_run = id_archivo_evidencia is not None
+    cedulas_objetivo_normalizadas = sorted(
+        {
+            cedula_normalizada
+            for cedula in (cedulas_objetivo or [])
+            if (cedula_normalizada := normalize_document(cedula))
+        }
+    )
+    cedula_scoped_run = bool(cedulas_objetivo_normalizadas)
     cedulas_evidencia = timed_step(
         timings,
         "fetch_cedulas_evidencia_arl",
@@ -2052,6 +2075,7 @@ def recalcular_cruce_notificaciones(
         or fecha_referencia_hasta is not None
         or source_scoped_run
         or evidence_scoped_run
+        or cedula_scoped_run
     )
     fetched_expected_rows = timed_step(
         timings,
@@ -2063,7 +2087,9 @@ def recalcular_cruce_notificaciones(
             solo_pendientes_filter=scoped_run and solo_pendientes,
             fecha_referencia_desde=fecha_referencia_desde,
             fecha_referencia_hasta=fecha_referencia_hasta,
-            cedulas_normalizadas=cedulas_evidencia,
+            cedulas_normalizadas=(
+                cedulas_objetivo_normalizadas or cedulas_evidencia
+            ),
             id_archivos_salas=archivos_salas or None,
         ),
     )
@@ -2086,7 +2112,9 @@ def recalcular_cruce_notificaciones(
         "fetch_fecha_maxima_calificacion_sistema",
         _fetch_latest_calificacion_sistema_audiencia_date,
     )
-    aplica_filtro_raw_fecha_maxima = not archivos_salas
+    aplica_filtro_raw_fecha_maxima = (
+        not archivos_salas and not cedula_scoped_run
+    )
     raw_skipped_by_date = 0
     if aplica_filtro_raw_fecha_maxima:
         all_expected_rows, raw_skipped_by_date = timed_step(
@@ -2172,6 +2200,7 @@ def recalcular_cruce_notificaciones(
         "id_archivo_salas": archivo_salas_unico,
         "id_archivos_salas": archivos_salas or None,
         "cedulas_evidencia": cedulas_evidencia,
+        "cedulas_objetivo": cedulas_objetivo_normalizadas,
         "fecha_referencia_desde": fecha_referencia_desde.isoformat()
         if fecha_referencia_desde
         else None,
@@ -2192,6 +2221,7 @@ def recalcular_cruce_notificaciones(
         "scoped_run": scoped_run,
         "fuente_cruce": fuente_cruce_normalizada,
         "source_scoped_run": source_scoped_run,
+        "cedula_scoped_run": cedula_scoped_run,
         "refrescar_resumen": refrescar_resumen,
         "filtro_raw_fecha_maxima_aplicado": aplica_filtro_raw_fecha_maxima,
         "raw_omitidas_por_fecha_audiencia": raw_skipped_by_date,

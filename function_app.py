@@ -14,13 +14,17 @@ import procesador_audiencias
 import procesador_arls
 import procesador_calificaciones
 import procesador_correo
+import procesador_correo_pdf
 import procesador_guias
 import procesador_revision_manual_notificaciones
 from src.load import db
 from src.load.write_audiencias import write_audiencias_result_to_sql
 from src.load.write_arls import write_arls_result_to_sql
 from src.load.write_calificaciones import write_calificaciones_result_to_sql
-from src.load.write_correo import write_correo_result_to_sql
+from src.load.write_correo import (
+    write_correo_pdf_result_to_sql,
+    write_correo_result_to_sql,
+)
 from src.load.write_guias import write_guias_result_to_sql
 from src.load.write_revision_manual_notificaciones import (
     write_revision_manual_notificaciones_result_to_sql,
@@ -29,6 +33,7 @@ from src.load.write_salas import write_salas_result_to_sql
 from src.reconcile.notificaciones import recalcular_cruce_notificaciones
 from src.reconcile.resumen_validacion import refrescar_resumen_validacion_radicado
 from src.reconcile.revision_manual_notificaciones import aplicar_revision_manual_notificaciones
+from src.utils.normalization import normalize_document
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -388,18 +393,31 @@ def handle_read_processing(
         )
 
 
-def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpResponse:
+def handle_recalcular_cruce_notificaciones(
+    req: func.HttpRequest,
+    require_cedula: bool = False,
+) -> func.HttpResponse:
     """Reejecuta reglas de cruce de notificaciones contra evidencia disponible."""
     logging.info("recalcular_cruce_notificaciones ejecutada")
 
     try:
         payload = get_optional_request_payload(req)
+        cedula_raw = payload.get("cedula_normalizada") or payload.get("cedula")
+        cedula_normalizada = normalize_document(cedula_raw)
+        if cedula_raw not in (None, "") and cedula_normalizada is None:
+            raise ValueError("cedula debe contener al menos un digito")
+        if require_cedula and cedula_normalizada is None:
+            raise ValueError("El payload debe incluir cedula o cedula_normalizada")
         solo_refrescar_resumen = parse_bool(
             payload,
             "solo_refrescar_resumen",
             False,
         )
         if solo_refrescar_resumen:
+            if require_cedula:
+                raise ValueError(
+                    "solo_refrescar_resumen no aplica al recalculo exclusivo por cedula"
+                )
             started_at = perf_counter()
             resumen = db.run_in_transaction(
                 refrescar_resumen_validacion_radicado,
@@ -451,7 +469,9 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
         refrescar_resumen = parse_bool(
             payload,
             "refrescar_resumen",
-            batch_size is None and id_archivos_salas is None,
+            batch_size is None
+            and id_archivos_salas is None
+            and cedula_normalizada is None,
         )
         fuente_cruce = (
             parse_optional_text(payload, "fuente_cruce")
@@ -468,6 +488,9 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 refrescar_resumen=refrescar_resumen,
                 fuente_cruce=fuente_cruce,
                 id_archivos_salas=id_archivos_salas,
+                cedulas_objetivo=[cedula_normalizada]
+                if cedula_normalizada
+                else None,
             )
         )
         return build_json_response(
@@ -476,6 +499,7 @@ def handle_recalcular_cruce_notificaciones(req: func.HttpRequest) -> func.HttpRe
                 "id_archivo_salas": id_archivo_salas,
                 "id_archivos_salas": id_archivos_salas,
                 "id_archivo_evidencia": id_archivo_evidencia,
+                "cedula_normalizada": cedula_normalizada,
                 "solo_pendientes": solo_pendientes,
                 "batch_size": batch_size,
                 "after_id_notificacion_esperada": after_id_notificacion_esperada,
@@ -560,6 +584,16 @@ def procesar_correo_certificado(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="procesar_correo_certificado_pdf", methods=["POST"])
+def procesar_correo_certificado_pdf(req: func.HttpRequest) -> func.HttpResponse:
+    return handle_sql_processing(
+        req,
+        "procesar_correo_certificado_pdf",
+        procesador_correo_pdf.process_payload_data,
+        write_correo_pdf_result_to_sql,
+    )
+
+
 @app.route(route="procesar_input_pdf_audiencias", methods=["POST"])
 def procesar_input_pdf_audiencias(req: func.HttpRequest) -> func.HttpResponse:
     return handle_sql_processing(
@@ -633,6 +667,13 @@ def procesar_sistema_jnc(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="recalcular_cruce_notificaciones", methods=["POST"])
 def recalcular_cruce_notificaciones_route(req: func.HttpRequest) -> func.HttpResponse:
     return handle_recalcular_cruce_notificaciones(req)
+
+
+@app.route(route="recalcular_cruce_notificaciones_cedula", methods=["POST"])
+def recalcular_cruce_notificaciones_cedula_route(
+    req: func.HttpRequest,
+) -> func.HttpResponse:
+    return handle_recalcular_cruce_notificaciones(req, require_cedula=True)
 
 
 @app.route(route="aplicar_revision_manual_notificaciones", methods=["POST"])
