@@ -21,6 +21,7 @@ REQUIRED_FIELDS = {
 }
 
 EXPECTED_FILE_TYPE = "CORREO_CERTIFICADO"
+EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
 
 def load_payload(path: Path) -> dict:
@@ -82,29 +83,57 @@ def normalize_column_name(value: object) -> str:
 def load_certified_email_csv(content: bytes) -> dict:
     csv_text = decode_csv_text(content)
     delimiter = detect_delimiter(csv_text)
-    reader = csv.DictReader(io.StringIO(csv_text), delimiter=delimiter)
+    reader = csv.reader(io.StringIO(csv_text), delimiter=delimiter)
+    try:
+        raw_headers = next(reader)
+    except StopIteration as exc:
+        raise ValueError("El CSV de correo certificado esta vacio") from exc
 
-    if not reader.fieldnames:
+    if not raw_headers:
         raise ValueError("El CSV de correo certificado no contiene encabezados")
 
-    raw_headers = [header or "" for header in reader.fieldnames]
+    raw_headers = [header or "" for header in raw_headers]
     normalized_headers = [normalize_column_name(header) for header in raw_headers]
     rows = []
+    repaired_rows = []
+    alignment_errors = []
+    total_rows = 0
 
-    for line_number, row in enumerate(reader, start=2):
-        rows.append(
-            {
-                normalized_header: row.get(raw_header)
-                for raw_header, normalized_header in zip(raw_headers, normalized_headers)
-            }
-            | {"numero_linea_csv": line_number}
+    for line_number, values in enumerate(reader, start=2):
+        total_rows += 1
+        aligned_values, was_repaired, alignment_error = align_csv_row(
+            values,
+            normalized_headers,
         )
+        if alignment_error:
+            alignment_errors.append(
+                {
+                    "tipo_error": "fila_csv_desalineada",
+                    "mensaje": alignment_error,
+                    "numero_linea_csv": line_number,
+                    "cantidad_columnas": len(values),
+                }
+            )
+            continue
+
+        row = {
+            normalized_header: aligned_values[index]
+            for index, normalized_header in enumerate(normalized_headers)
+            if normalized_header
+        }
+        row["numero_linea_csv"] = line_number
+        rows.append(row)
+        if was_repaired:
+            repaired_rows.append(line_number)
 
     return {
         "delimitador": delimiter,
         "encabezados_originales": raw_headers,
         "encabezados_normalizados": normalized_headers,
         "filas_crudas": rows,
+        "total_filas_leidas": total_rows,
+        "filas_reparadas": repaired_rows,
+        "errores_alineacion": alignment_errors,
     }
 
 
@@ -121,12 +150,13 @@ def split_names_email(value: object) -> dict[str, str | None]:
     if not clean_value:
         return {"nombres": None, "correo": None}
 
-    match = re.search(r"\(([^()]*@[^()]*)\)", clean_value)
-    correo = clean_text_value(match.group(1)).lower() if match else None
+    match = EMAIL_PATTERN.search(clean_value)
+    correo = clean_text_value(match.group(0)).lower() if match else None
     nombres = clean_value
 
     if match:
         nombres = f"{clean_value[:match.start()]} {clean_value[match.end():]}"
+        nombres = re.sub(r"[()<>]", " ", nombres)
 
     return {
         "nombres": clean_text_value(nombres),
@@ -171,6 +201,70 @@ def parse_datetime_value(value: str) -> datetime | None:
             continue
 
     return None
+
+
+def is_date_bundle(value: object) -> bool:
+    clean_value = clean_text_value(value)
+    if not clean_value:
+        return False
+
+    parts = [clean_text_value(part) for part in re.split(r"\s+/\s+", clean_value)]
+    date_parts = [part for part in parts if part]
+    return bool(date_parts) and all(parse_datetime_value(part) for part in date_parts)
+
+
+def align_csv_row(
+    values: list[str],
+    normalized_headers: list[str],
+) -> tuple[list[str], bool, str | None]:
+    """Repara filas cuyo campo Nombres - Email contiene comas sin escapar."""
+    expected_count = len(normalized_headers)
+    aligned_values = list(values)
+
+    while len(aligned_values) > expected_count and not clean_text_value(aligned_values[-1]):
+        aligned_values.pop()
+
+    try:
+        date_index = normalized_headers.index("fecha")
+    except ValueError:
+        return aligned_values, False, "El encabezado no contiene la columna Fecha"
+
+    expected_date = (
+        aligned_values[date_index]
+        if date_index < len(aligned_values)
+        else None
+    )
+    repaired = False
+    if not is_date_bundle(expected_date):
+        candidate_index = next(
+            (
+                index
+                for index in range(date_index + 1, min(len(aligned_values), date_index + 6))
+                if is_date_bundle(aligned_values[index])
+            ),
+            None,
+        )
+        if candidate_index is not None and date_index == 1:
+            merged_recipient = ", ".join(
+                value.strip()
+                for value in aligned_values[:candidate_index]
+                if value.strip()
+            )
+            aligned_values = [merged_recipient, *aligned_values[candidate_index:]]
+            repaired = True
+
+    while len(aligned_values) > expected_count and not clean_text_value(aligned_values[-1]):
+        aligned_values.pop()
+    if len(aligned_values) > expected_count:
+        return (
+            aligned_values,
+            repaired,
+            "La fila contiene columnas adicionales que no se pudieron reconstruir",
+        )
+    if len(aligned_values) < expected_count:
+        aligned_values.extend([""] * (expected_count - len(aligned_values)))
+
+    return aligned_values, repaired, None
 
 
 def format_short_date(value: str) -> str:
@@ -232,6 +326,58 @@ def clean_certified_email_rows(rows: list[dict]) -> list[dict]:
     return clean_rows
 
 
+def validate_certified_email_row(row: dict) -> list[str]:
+    errors = []
+    if not row.get("fecha") or parse_datetime_value(str(row["fecha"])) is None:
+        errors.append("fecha no valida")
+
+    email = clean_text_value(row.get("correo"))
+    if not email or EMAIL_PATTERN.fullmatch(email) is None:
+        errors.append("correo destinatario no valido")
+
+    subject = clean_text_value(row.get("asunto"))
+    if not subject:
+        errors.append("asunto vacio")
+    elif is_date_bundle(subject):
+        errors.append("el asunto contiene una fecha y evidencia desplazamiento")
+
+    event = clean_text_value(row.get("evento"))
+    if not event:
+        errors.append("evento vacio")
+    elif is_date_bundle(event):
+        errors.append("el evento contiene una fecha y evidencia desplazamiento")
+    else:
+        normalized_event = normalize_column_name(event).replace("_", " ")
+        subject_markers = (
+            "constancia de asistencia",
+            "comunicacion dictamen",
+            "valoracion virtual",
+            "valoracion presencial",
+        )
+        if any(marker in normalized_event for marker in subject_markers):
+            errors.append("el evento contiene un asunto y evidencia desplazamiento")
+
+    return errors
+
+
+def filter_valid_certified_email_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    valid_rows = []
+    validation_errors = []
+    for row in rows:
+        errors = validate_certified_email_row(row)
+        if not errors:
+            valid_rows.append(row)
+            continue
+        validation_errors.append(
+            {
+                "tipo_error": "fila_correo_certificado_invalida",
+                "mensaje": "; ".join(errors),
+                "numero_linea_csv": row.get("numero_linea_csv"),
+            }
+        )
+    return valid_rows, validation_errors
+
+
 def process_payload_data(payload: dict) -> dict:
     payload = validate_payload(payload)
     content = decode_file(payload)
@@ -239,9 +385,19 @@ def process_payload_data(payload: dict) -> dict:
     csv_in_memory = load_certified_email_csv(content)
     raw_rows = csv_in_memory["filas_crudas"]
     clean_rows = clean_certified_email_rows(raw_rows)
+    valid_rows, validation_errors = filter_valid_certified_email_rows(clean_rows)
+    processing_errors = [
+        *csv_in_memory["errores_alineacion"],
+        *validation_errors,
+    ]
+    status = (
+        "ERROR"
+        if csv_in_memory["total_filas_leidas"] > 0 and not valid_rows
+        else "OK"
+    )
 
     return {
-        "status": "OK",
+        "status": status,
         "tipo_archivo": payload["tipo_archivo"],
         "nombre_archivo": payload["nombre_archivo"],
         "ruta_sharepoint": payload["ruta_sharepoint"],
@@ -249,8 +405,12 @@ def process_payload_data(payload: dict) -> dict:
         "delimitador_csv": csv_in_memory["delimitador"],
         "encabezados_originales": csv_in_memory["encabezados_originales"],
         "encabezados_normalizados": csv_in_memory["encabezados_normalizados"],
-        "total_filas_correo_certificado": len(raw_rows),
-        "tabla_correo_certificado": clean_rows,
+        "total_filas_correo_certificado": csv_in_memory["total_filas_leidas"],
+        "filas_corregidas_correo_certificado": len(csv_in_memory["filas_reparadas"]),
+        "filas_rechazadas_correo_certificado": len(processing_errors),
+        "lineas_corregidas_correo_certificado": csv_in_memory["filas_reparadas"],
+        "mensaje_error": processing_errors,
+        "tabla_correo_certificado": valid_rows,
     }
 
 

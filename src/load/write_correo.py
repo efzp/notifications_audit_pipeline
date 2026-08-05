@@ -50,6 +50,13 @@ def write_correo_result_to_sql(id_archivo: int, result: dict[str, Any]) -> dict[
     summary = {
         "status": "OK",
         "id_archivo": id_archivo,
+        "filas_leidas": int(result.get("total_filas_correo_certificado") or 0),
+        "filas_corregidas": int(
+            result.get("filas_corregidas_correo_certificado") or 0
+        ),
+        "filas_rechazadas": int(
+            result.get("filas_rechazadas_correo_certificado") or 0
+        ),
         "correos_insertados": 0,
         "errores_insertados": 0,
         "reglas_insertadas": 0,
